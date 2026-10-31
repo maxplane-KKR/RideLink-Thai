@@ -1,0 +1,50 @@
+# Build & temp directories
+output/
+versions/
+*.idsig
+*.dex
+.gradle/
+.gradle-home/
+.tmp/
+.kotlin/
+.build-user/
+build/
+**/build/
+.cxx/
+**/cxx/
+
+# Gradle & Android Studio / IntelliJ
+.idea/
+*.iml
+.navigation/
+captures/
+local.properties
+.externalNativeBuild
+
+# OS Generated
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+*~
+*.log
+
+# OneDrive sync & conflict files
+**/.onedrive_conflicts/
+*Theboy-TUF505DD*
+*onedrive_conflicts*
+
+# Local OneDrive Workspace Only (Excluded from GitHub)
+/APK/
+/analysis/
+/localization/
+/tools/
+/scripts/
+/src/
+/handoff.md
+/ANDROID_AUTO_ARCHITECTURE.md
+RideLink-Thai/HANDOFF.md
+RideLink-Thai/design/
+RideLink-Thai/vendor/
+RideLink-Thai/upstream-files.json
+RideLink-Thai/scripts/*.py

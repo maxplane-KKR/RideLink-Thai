@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Background & Glass -->
+    <color name="bg_deep_dark">#040711</color>
+    <color name="glass_card_bg">#18141F32</color>
+    <color name="glass_card_inner">#30FFFFFF</color>
+    <color name="glass_border">#28FFFFFF</color>
+    <color name="glass_border_highlight">#60FFFFFF</color>
+
+    <!-- Gemstone Gradients / Accents -->
+    <color name="emerald_bright">#34D399</color>
+    <color name="emerald_mid">#10B981</color>
+    <color name="emerald_deep">#059669</color>
+
+    <color name="ruby_bright">#F87171</color>
+    <color name="ruby_mid">#EF4444</color>
+    <color name="ruby_deep">#B91C1C</color>
+
+    <color name="sapphire_bright">#60A5FA</color>
+    <color name="sapphire_mid">#2563EB</color>
+    <color name="sapphire_deep">#1D4ED8</color>
+
+    <color name="teal_bright">#2DD4BF</color>
+    <color name="teal_mid">#0D9488</color>
+
+    <color name="cyan_neon">#38BDF8</color>
+    <color name="green_neon">#00E676</color>
+    <color name="amber_accent">#FBBF24</color>
+
+    <!-- Typography -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#94A3B8</color>
+    <color name="text_muted">#64748B</color>
+
+    <!-- Fallbacks -->
+    <color name="primary">#2563EB</color>
+    <color name="primary_dark">#1D4ED8</color>
+    <color name="accent">#00E676</color>
+    <color name="background">#040711</color>
+</resources>

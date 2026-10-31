@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- Camera Preview Fullscreen -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Center QR Viewfinder Target Reticle -->
+    <RelativeLayout
+        android:layout_width="260dp"
+        android:layout_height="260dp"
+        android:layout_centerInParent="true"
+        android:background="@drawable/qr_reticle_frame">
+
+        <!-- Laser Scan Indicator Line -->
+        <View
+            android:id="@+id/viewLaser"
+            android:layout_width="match_parent"
+            android:layout_height="2dp"
+            android:layout_centerVertical="true"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:background="#00E676" />
+    </RelativeLayout>
+
+    <!-- Top Floating Glass Bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentTop="true"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="20dp"
+        android:layout_marginEnd="16dp"
+        android:background="@drawable/card_liquid_glass"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="12dp">
+
+        <ImageButton
+            android:id="@+id/btnBackScan"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="@drawable/card_inner_glass"
+            android:contentDescription="กลับ"
+            android:src="@drawable/ic_back_vector"
+            app:tint="@color/text_primary" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="สแกน QR หน้าจอรถ"
+                android:textColor="@color/text_primary"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvScanStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="มีระบบ Auto Zoom &amp; Auto Focus"
+                android:textColor="@color/cyan_neon"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/btnToggleTorch"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="@drawable/card_inner_glass"
+            android:contentDescription="เปิดไฟฉาย"
+            android:src="@drawable/ic_flash_vector"
+            app:tint="@color/amber_accent" />
+    </LinearLayout>
+
+    <!-- Bottom Controls & Quick Zoom Pills -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentBottom="true"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingBottom="36dp">
+
+        <!-- Quick Zoom Selector Buttons: [ 1x ] [ 2x ] [ 3x ] -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:layout_marginBottom="16dp"
+            android:background="@drawable/dock_capsule_bg"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp">
+
+            <androidx.appcompat.widget.AppCompatButton
+                android:id="@+id/btnZoom1x"
+                android:layout_width="56dp"
+                android:layout_height="34dp"
+                android:background="@drawable/dock_pill_active"
+                android:backgroundTint="@null"
+                android:text="1x"
+                android:textColor="@color/text_primary"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <androidx.appcompat.widget.AppCompatButton
+                android:id="@+id/btnZoom2x"
+                android:layout_width="56dp"
+                android:layout_height="34dp"
+                android:background="@null"
+                android:backgroundTint="@null"
+                android:text="2x"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <androidx.appcompat.widget.AppCompatButton
+                android:id="@+id/btnZoom3x"
+                android:layout_width="56dp"
+                android:layout_height="34dp"
+                android:background="@null"
+                android:backgroundTint="@null"
+                android:text="3x"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:text="🔍 แตะหน้าจอเพื่อโฟกัส หรือให้กล้องซูมอัตโนมัติ"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
+
+        <androidx.appcompat.widget.AppCompatButton
+            android:id="@+id/btnCancelScan"
+            android:layout_width="160dp"
+            android:layout_height="44dp"
+            android:background="@drawable/btn_liquid_ruby"
+            android:backgroundTint="@null"
+            android:stateListAnimator="@null"
+            android:text="ยกเลิก"
+            android:textColor="@color/text_primary"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+</RelativeLayout>

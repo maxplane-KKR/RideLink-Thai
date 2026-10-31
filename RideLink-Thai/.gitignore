@@ -1,0 +1,10 @@
+.gradle/
+.gradle-home/
+.android/
+.build-user/
+.kotlin/
+.tmp/
+build/
+app/build/
+signing/
+local.properties
