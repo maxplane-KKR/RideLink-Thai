@@ -1,7 +1,7 @@
 # RideLink TH (RideLinkไทย)
 
 <p align="center">
-  <img src="RideLink-Thai/app/src/main/res/drawable/ic_launcher_round.png" width="96" height="96" alt="RideLink TH Logo" />
+  <img src="docs/logo.png" width="96" height="96" alt="RideLink TH Logo" />
 </p>
 
 <p align="center">
