@@ -137,12 +137,11 @@ try {
             $copiedApk = Join-Path $localApkDir 'app-debug.apk'
             Copy-Item -LiteralPath $apk -Destination $copiedApk -Force
             
-            # Master APK directory for all agents and devices
+            # Master APK directory
             $workspaceRoot = (Split-Path -Parent $projectRoot)
             $apkMasterDir = Join-Path $workspaceRoot 'APK'
             New-Item -ItemType Directory -Force -Path $apkMasterDir | Out-Null
             Copy-Item -LiteralPath $apk -Destination (Join-Path $apkMasterDir 'RideLink-Thai-latest.apk') -Force
-            Copy-Item -LiteralPath $apk -Destination (Join-Path $apkMasterDir 'RideLink-Thai-v0.2.1-debug.apk') -Force
 
             Write-Output "APK: $copiedApk"
             Write-Output "Master APK: $(Join-Path $apkMasterDir 'RideLink-Thai-latest.apk')"
