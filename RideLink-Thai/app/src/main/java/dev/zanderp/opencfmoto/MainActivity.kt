@@ -4,8 +4,10 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -533,8 +535,18 @@ class MainActivity : AppCompatActivity() {
             selectTab(1)
         }
 
-        btnCheckServer.setOnClickListener { checkServerPort() }
-        btnOpenAaSettings.setOnClickListener { openAndroidAutoSettings() }
+        btnCheckServer.setOnClickListener {
+            it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            checkServerPort(fromUserClick = true)
+        }
+        btnOpenAaSettings.setOnClickListener {
+            it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            openAndroidAutoSettings()
+        }
+        tvServerStatus.setOnClickListener {
+            it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            openAndroidAutoSettings()
+        }
 
         // Quick AA Buttons (wired identically on both Tab 0 & Tab 1)
         val sendMaps = View.OnClickListener {
@@ -1200,9 +1212,9 @@ class MainActivity : AppCompatActivity() {
             tvOnlineBadge.text = "● พบปัญหา"
             tvOnlineBadge.setTextColor(ContextCompat.getColor(this, R.color.ruby_bright))
         } else {
-            statusDot.setBackgroundResource(R.drawable.btn_liquid_emerald)
-            tvOnlineBadge.text = "● พร้อมทำงาน"
-            tvOnlineBadge.setTextColor(ContextCompat.getColor(this, R.color.green_neon))
+            statusDot.setBackgroundResource(R.drawable.dock_capsule_bg)
+            tvOnlineBadge.text = "● สแตนด์บาย"
+            tvOnlineBadge.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
         }
     }
 
@@ -1230,19 +1242,73 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun checkServerPort() {
+    private fun checkServerPort(fromUserClick: Boolean = false) {
         val isLive = AaVideoBridge.aaSessionLive
         val isRunning = SessionService.isRunning
         if (isLive) {
             tvServerStatus.text = "● สตรีม Android Auto กำลังทำงานสด"
             tvServerStatus.setTextColor(ContextCompat.getColor(this, R.color.green_neon))
-        } else if (isRunning) {
-            tvServerStatus.text = "● กำลังเชื่อมต่อ Android Auto (:5277 / :5288)"
-            tvServerStatus.setTextColor(ContextCompat.getColor(this, R.color.cyan_neon))
-        } else {
-            tvServerStatus.text = "● ระบบพร้อมเชื่อมต่อ (แตะ 'เริ่มเชื่อมต่อ')"
-            tvServerStatus.setTextColor(ContextCompat.getColor(this, R.color.green_neon))
+            if (fromUserClick) {
+                Toast.makeText(this, "สตรีม Android Auto กำลังทำงานสด", Toast.LENGTH_SHORT).show()
+            }
+            return
         }
+        if (isRunning) {
+            tvServerStatus.text = "● กำลังเชื่อมต่อ Android Auto / รถ"
+            tvServerStatus.setTextColor(ContextCompat.getColor(this, R.color.cyan_neon))
+            if (fromUserClick) {
+                Toast.makeText(this, "ระบบกำลังดำเนินการเชื่อมต่อ...", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        tvServerStatus.text = "● กำลังตรวจสถานะเซิร์ฟเวอร์..."
+        tvServerStatus.setTextColor(ContextCompat.getColor(this, R.color.amber_accent))
+
+        lifecycleScope.launch {
+            val isListening = withContext(Dispatchers.IO) {
+                isPortListening(5277, 400)
+            }
+            if (isFinishing || isDestroyed) return@launch
+
+            if (isListening) {
+                tvServerStatus.text = "● เซิร์ฟเวอร์เฮดยูนิต: เปิดอยู่ (:5277 พร้อมเชื่อมต่อ)"
+                tvServerStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.green_neon))
+                if (fromUserClick) {
+                    Toast.makeText(this@MainActivity, "เซิร์ฟเวอร์เฮดยูนิตเปิดอยู่ (:5277) พร้อมทำงาน", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                tvServerStatus.text = "● เซิร์ฟเวอร์เฮดยูนิต: ปิดอยู่ (แตะเปิดตั้งค่า AA)"
+                tvServerStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.ruby_bright))
+                if (fromUserClick) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "เซิร์ฟเวอร์เฮดยูนิตปิดอยู่! กรุณากดปุ่ม 3 จุดใน Android Auto แล้วเลือก 'Start headunit server'",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun isPortListening(port: Int, timeoutMs: Int = 400): Boolean {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val bound = try { cm?.boundNetworkForProcess } catch (_: Exception) { null }
+        if (bound != null) {
+            try { cm?.bindProcessToNetwork(null) } catch (_: Exception) {}
+        }
+        for (host in arrayOf("127.0.0.1", "localhost", "::1")) {
+            try {
+                Socket().use { s ->
+                    s.reuseAddress = true
+                    s.connect(InetSocketAddress(host, port), timeoutMs)
+                    return true
+                }
+            } catch (_: Exception) {
+                // Try next
+            }
+        }
+        return false
     }
 
     private fun openAndroidAutoSettings() {

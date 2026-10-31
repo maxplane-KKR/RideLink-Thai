@@ -13,8 +13,8 @@
   <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/latest">
     <img src="https://img.shields.io/github/v/release/maxplane-KKR/RideLink-Thai?label=%E0%B9%80%E0%B8%A7%E0%B8%AD%E0%B8%A3%E0%B9%8C%E0%B8%8improved%E0%B8%A5%E0%B9%88%E0%B8%B2%E0%B8%AA%E0%B8%B8%E0%B8%94&color=00C853&style=for-the-badge" alt="เวอร์ชันล่าสุด" />
   </a>
-  <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.5/RideLink-Thai-v0.2.5.apk">
-    <img src="https://img.shields.io/badge/%E0%B8%94%E0%B8%B2%E0%B8%A7%E0%B8%99%E0%B9%8C%E0%B9%82%E0%B8%AB%E0%B8%A5%E0%B8%94-APK%20(v0.2.5)-2962FF?style=for-the-badge&logo=android&logoColor=white" alt="ดาวน์โหลด APK" />
+  <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.6/RideLink-Thai-v0.2.6.apk">
+    <img src="https://img.shields.io/badge/%E0%B8%94%E0%B8%B2%E0%B8%A7%E0%B8%99%E0%B9%8C%E0%B9%82%E0%B8%AB%E0%B8%A5%E0%B8%94-APK%20(v0.2.6)-2962FF?style=for-the-badge&logo=android&logoColor=white" alt="ดาวน์โหลด APK" />
   </a>
 </p>
 
@@ -33,7 +33,7 @@
 
 สำหรับผู้ใช้งานทั่วไป สามารถกดดาวน์โหลดไฟล์ `.apk` ไปติดตั้งในโทรศัพท์มือถือ Android ได้ทันที:
 
-* 📱 **[👉 คลิกดาวน์โหลด RideLink-Thai-v0.2.5.apk (ไฟล์ติดตั้งหลัก แนะนำ)](https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.5/RideLink-Thai-v0.2.5.apk)**
+* 📱 **[👉 คลิกดาวน์โหลด RideLink-Thai-v0.2.6.apk (ไฟล์ติดตั้งหลัก แนะนำ)](https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.6/RideLink-Thai-v0.2.6.apk)**
 * 📦 **[ดูรายการเวอร์ชันทั้งหมด (GitHub Releases)](https://github.com/maxplane-KKR/RideLink-Thai/releases)**
 
 ---
