@@ -10,13 +10,31 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/latest">
+    <img src="https://img.shields.io/github/v/release/maxplane-KKR/RideLink-Thai?label=Latest%20Release&color=00C853&style=for-the-badge" alt="Latest Release" />
+  </a>
+  <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.5/RideLink-Thai-v0.2.5.apk">
+    <img src="https://img.shields.io/badge/Download-APK%20(Direct)-2962FF?style=for-the-badge&logo=android&logoColor=white" alt="Download APK" />
+  </a>
+</p>
+
+<p align="center">
   <a href="README_TH.md">🇹🇭 อ่านคู่มือภาษาไทย (Thai Guide)</a> •
+  <a href="#-quick-download">📥 Download APK</a> •
   <a href="#key-features">Key Features</a> •
   <a href="#screenshots">Screenshots</a> •
-  <a href="#how-it-works">How It Works</a> •
   <a href="#quick-start-guide">Quick Start</a> •
   <a href="#supported-motorcycles">Supported Bikes</a>
 </p>
+
+---
+
+## 📥 Quick Download (One-Click)
+
+Download the pre-compiled Android package (`.apk`) directly to your phone:
+
+* 📱 **[Download RideLink-Thai-v0.2.5.apk (Direct Link)](https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.5/RideLink-Thai-v0.2.5.apk)**
+* 📦 **[All Release Versions on GitHub Releases](https://github.com/maxplane-KKR/RideLink-Thai/releases)**
 
 ---
 

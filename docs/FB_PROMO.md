@@ -17,7 +17,7 @@
 ✅ ฟรี! โอเพนซอร์ส โหลดติดตั้งได้ทันที ไม่ต้องตัดต่อสายไฟ ไม่หลุดประกัน
 
 ดาวน์โหลดและดูวิธีใช้งานได้ที่นี่เลยครับ 👇
-🔗 https://github.com/maxplane-KKR/RideLink-Thai
+🔗 ดาวน์โหลด APK: https://github.com/maxplane-KKR/RideLink-Thai/releases/latest
 
 #RideLinkTH #AndroidAuto #Zontes #CFMoto #GoogleMapsบนมอไซค์ #ของดีบอกต่อ
 
@@ -66,4 +66,4 @@
 5️⃣ **มีชุดจอยควบคุมในตัว**: สำหรับจอรถที่ไม่มีทัชสกรีน ใช้งานง่ายแม้ใส่ถุงมือขับขี่
 
 ทดลองใช้งานได้ฟรีแล้ววันนี้ที่ GitHub 👇
-🔗 https://github.com/maxplane-KKR/RideLink-Thai
+🔗 ดาวน์โหลด APK: https://github.com/maxplane-KKR/RideLink-Thai/releases/latest
