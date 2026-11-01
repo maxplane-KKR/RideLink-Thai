@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/latest">
-    <img src="https://img.shields.io/github/v/release/maxplane-KKR/RideLink-Thai?label=Latest%20Release&color=00C853&style=for-the-badge" alt="Latest Release" />
+    <img src="https://img.shields.io/badge/Latest%20Release-v0.2.7-00C853?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" />
   </a>
   <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.7/RideLink-Thai-v0.2.7.apk">
     <img src="https://img.shields.io/badge/Download-APK%20(Direct)-2962FF?style=for-the-badge&logo=android&logoColor=white" alt="Download APK" />
