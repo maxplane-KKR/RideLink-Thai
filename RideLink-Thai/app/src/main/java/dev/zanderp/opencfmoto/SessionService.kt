@@ -235,8 +235,21 @@ class SessionService : Service() {
                             LogBus.log("[Session] ผู้ใช้กดออกจาก Android Auto — หยุดเซสชัน")
                             mainHandler.post { stopSession(manual = false) }
                         } else {
-                            // Temporary AA drop: keep receiver listening for reconnect
-                            LogBus.log("[Session] AA ตัดการเชื่อมต่อชั่วคราว — เปิดรับการเชื่อมต่อใหม่บน :5288")
+                            // Temporary AA drop: the receiver's coordinator redials :5277 after the
+                            // settle window and keeps :5288 open — no manual Stop → Connect needed.
+                            LogBus.log("[Session] AA ตัดการเชื่อมต่อชั่วคราว — กำลังต่อ :5277 / :5288 ใหม่อัตโนมัติ")
+                            mainHandler.post {
+                                if (isRunning && receiver != null) {
+                                    ConnectionState.set(Phase.STARTING_AA, "AA หลุดชั่วคราว — กำลังต่อใหม่อัตโนมัติ")
+                                }
+                            }
+                        }
+                    }
+                    onHeadunitGuidance = { reasonTh ->
+                        mainHandler.post {
+                            if (isRunning && receiver != null && !AaVideoBridge.aaSessionLive) {
+                                ConnectionState.set(Phase.STARTING_AA, reasonTh)
+                            }
                         }
                     }
                     onNeedSelfModeFallback = {

@@ -79,19 +79,14 @@ object AaSelfMode {
         }
 
         if (!activityStarted) {
-            // Activity denied — escalate Receiver immediately, then HUR after wait.
+            // Activity denied — escalate Receiver immediately (Pure Wi-Fi / Loopback).
+            // Skip slow BT HUR handshake entirely for instant Wi-Fi/Loopback startup.
             fireWirelessStartupReceiver(app, port, networkToUse, fakeWifiInfo, log)
-            scheduleIfStillNeeded(gen, ESCALATE_WAIT_MS) {
-                if (sessionLive()) {
-                    log("[AA] self-mode escalate stop — session live after Receiver")
-                    return@scheduleIfStillNeeded
-                }
-                fireHurProjection(app, log)
-            }
             return
         }
 
-        // Activity launched without throw — wait for accept, then Receiver, then HUR.
+        // Activity launched without throw — wait for accept, then Receiver.
+        // Skip slow BT HUR handshake entirely for instant Wi-Fi/Loopback startup.
         scheduleIfStillNeeded(gen, ESCALATE_WAIT_MS) {
             if (sessionLive()) {
                 log("[AA] self-mode escalate stop — session live after Activity")
@@ -99,20 +94,19 @@ object AaSelfMode {
             }
             log("[AA] no session after Activity — escalating to WirelessStartupReceiver")
             fireWirelessStartupReceiver(app, port, networkToUse, fakeWifiInfo, log)
-            scheduleIfStillNeeded(gen, ESCALATE_WAIT_MS) {
-                if (sessionLive()) {
-                    log("[AA] self-mode escalate stop — session live after Receiver")
-                    return@scheduleIfStillNeeded
-                }
-                log("[AA] no session after Receiver — escalating to START_WIRELESS_PROJECTION")
-                fireHurProjection(app, log)
-            }
         }
     }
 
     private fun sessionLive(): Boolean =
         dev.zanderp.opencfmoto.AaVideoBridge.aaSessionLive ||
+            dev.zanderp.opencfmoto.AaVideoBridge.aaHandshaking ||
             dev.zanderp.opencfmoto.AaVideoBridge.aaDecoding
+
+    /** Drop every pending escalation step (called on Stop so nothing pokes Gearhead afterwards). */
+    fun cancel() {
+        triggerGeneration.incrementAndGet()
+        mainHandler.removeCallbacksAndMessages(null)
+    }
 
     private fun scheduleIfStillNeeded(gen: Int, delayMs: Long, block: () -> Unit) {
         mainHandler.postDelayed({
@@ -165,7 +159,7 @@ object AaSelfMode {
                 addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             }
             app.sendBroadcast(btReceiverIntent)
-            log("[AA] broadcast fallback 2 (START_WIRELESS_PROJECTION mac=$mac) sent")
+            log("[AA] broadcast fallback 2 (START_WIRELESS_PROJECTION mac=••:${mac.takeLast(5)}) sent")
         } catch (e: Exception) {
             log("[AA] broadcast fallback 2 failed: ${e.message} — is Android Auto installed & set up?")
         }
@@ -234,33 +228,35 @@ object AaSelfMode {
                 emptyList()
             }
 
-            val savedSsid = try {
-                dev.zanderp.opencfmoto.BikeMemory.selected(context)?.qr?.ssid
-            } catch (_: Exception) {
-                null
+            val savedSsids = savedBikeSsids(context)
+            val candidates = bonded.map {
+                dev.zanderp.opencfmoto.ProjectionHarness.BtDeviceCandidate(
+                    address = it.address,
+                    name = try { it.name } catch (_: SecurityException) { null },
+                    connected = it.isConnectedCompat(),
+                )
             }
-
-            val connected = bonded.filter { it.isConnectedCompat() }
-            val bikeConnected = connected.firstOrNull { isBikeDevice(it, savedSsid) }
-            val anyConnected = bikeConnected ?: connected.firstOrNull()
-
-            // Prefer a live connection; else bike-looking bond; never a random first bond when
-            // audio is connected but we couldn't resolve which device (use first bond only then).
-            val selected = anyConnected
-                ?: bonded.firstOrNull { isBikeDevice(it, savedSsid) }
-                ?: if (audioConnected) bonded.firstOrNull() else null
-                ?: bonded.firstOrNull()
+            // Bike cluster only (connected first, then bonded). Never a smartwatch / earbuds /
+            // random first bond — Gearhead would try to project to that device instead.
+            val selected = dev.zanderp.opencfmoto.ProjectionHarness.selectBikeBluetoothMac(candidates, savedSsids)
 
             log(
-                "[AA] SelfMode BT: bonded=${bonded.size} " +
-                    "connectedMac=${anyConnected?.address} selected=${selected?.address} " +
-                    "name=${selected?.name}",
+                "[AA] SelfMode BT: bonded=${bonded.size} audioConnected=$audioConnected " +
+                    "bikeSelected=${selected != null}",
             )
-            selected?.address
+            selected
         } catch (e: Exception) {
             log("[AA] BT MAC lookup failed: ${e.message}")
             null
         }
+    }
+
+    private fun savedBikeSsids(context: Context): List<String> = try {
+        val selected = dev.zanderp.opencfmoto.BikeMemory.selected(context)?.qr?.ssid
+        val all = dev.zanderp.opencfmoto.BikeMemory.devices(context).mapNotNull { it.qr?.ssid }
+        (listOfNotNull(selected) + all).distinct()
+    } catch (_: Exception) {
+        emptyList()
     }
 
     /** True when at least one bonded Bluetooth device matching a bike cluster is actively connected. */
@@ -285,36 +281,9 @@ object AaSelfMode {
         savedSsid: String? = null,
         allSavedSsids: List<String> = emptyList(),
     ): Boolean {
-        val n = try { device.name } catch (_: SecurityException) { null } ?: return false
-        val ssidsToCheck = if (savedSsid != null) listOf(savedSsid) + allSavedSsids else allSavedSsids
-        for (candidate in ssidsToCheck) {
-            val clean = candidate.trim()
-            if (clean.isNotBlank()) {
-                if (n.equals(clean, ignoreCase = true) || n.contains(clean, ignoreCase = true)) return true
-                if (clean.length >= 6 && n.contains(clean.takeLast(6), ignoreCase = true)) return true
-                if (clean.length >= 4 && n.endsWith(clean.takeLast(4), ignoreCase = true)) return true
-            }
-        }
-        if (n.matches(Regex("^[0-9A-Fa-f]{8,16}$"))) return true
-        return n.contains("Zontes", ignoreCase = true) ||
-            n.startsWith("ZT", ignoreCase = true) ||
-            n.contains("Carbit", ignoreCase = true) ||
-            n.contains("EasyConn", ignoreCase = true) ||
-            n.contains("150", ignoreCase = true) ||
-            n.contains("310", ignoreCase = true) ||
-            n.contains("350", ignoreCase = true) ||
-            n.contains("368", ignoreCase = true) ||
-            n.contains("703", ignoreCase = true) ||
-            n.contains("CFMOTO", ignoreCase = true) ||
-            n.contains("CFDL", ignoreCase = true) ||
-            n.contains("Bike", ignoreCase = true) ||
-            n.contains("Moto", ignoreCase = true) ||
-            n.contains("VOGE", ignoreCase = true) ||
-            n.contains("QJ", ignoreCase = true) ||
-            n.contains("Benelli", ignoreCase = true) ||
-            n.contains("Morini", ignoreCase = true) ||
-            n.contains("Alltrhike", ignoreCase = true) ||
-            n.contains("Kove", ignoreCase = true)
+        val n = try { device.name } catch (_: SecurityException) { null }
+        val ssids = if (savedSsid != null) listOf(savedSsid) + allSavedSsids else allSavedSsids
+        return dev.zanderp.opencfmoto.ProjectionHarness.isBikeDeviceName(n, ssids)
     }
 
     private fun BluetoothDevice.isConnectedCompat(): Boolean = try {

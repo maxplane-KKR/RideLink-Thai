@@ -7,7 +7,6 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -34,11 +33,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import dev.zanderp.opencfmoto.aa.AaInput
 import dev.zanderp.opencfmoto.aa.AaSelfMode
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.net.InetSocketAddress
-import java.net.Socket
 
 class MainActivity : AppCompatActivity() {
 
@@ -143,6 +138,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnPresetDeepSafe: Button
     private lateinit var btnPresetFullReset: Button
 
+    private lateinit var btnTouchYMinus: Button
+    private lateinit var tvTouchYOffset: TextView
+    private lateinit var btnTouchYPlus: Button
+    private lateinit var btnTouchYReset: Button
+
     private lateinit var rgProfile: RadioGroup
     private lateinit var rbProfileAuto: RadioButton
     private lateinit var rbProfileZontes: RadioButton
@@ -195,6 +195,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ScreenMargins.load(this)
+        TouchPrefs.init(this)
         setContentView(R.layout.activity_main)
         enableHighRefreshRate()
 
@@ -438,6 +439,11 @@ class MainActivity : AppCompatActivity() {
         btnPresetDeepSafe = findViewById(R.id.btnPresetDeepSafe)
         btnPresetFullReset = findViewById(R.id.btnPresetFullReset)
 
+        btnTouchYMinus = findViewById(R.id.btnTouchYMinus)
+        tvTouchYOffset = findViewById(R.id.tvTouchYOffset)
+        btnTouchYPlus = findViewById(R.id.btnTouchYPlus)
+        btnTouchYReset = findViewById(R.id.btnTouchYReset)
+
         rgProfile = findViewById(R.id.rgProfile)
         rbProfileAuto = findViewById(R.id.rbProfileAuto)
         rbProfileZontes = findViewById(R.id.rbProfileZontes)
@@ -666,6 +672,23 @@ class MainActivity : AppCompatActivity() {
         btnPresetFullReset.setOnClickListener {
             it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
             applySafeAreaPreset(ProjectionHarness.SafeAreaPreset.FULL_PANEL, "รีเซ็ตขนาดเต็มจอ 100% แล้ว")
+        }
+
+        // Touch Y Offset Tuning
+        btnTouchYMinus.setOnClickListener {
+            it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            TouchPrefs.setYOffset(this, TouchPrefs.yOffset - 6)
+            refreshTouchOffsetUi()
+        }
+        btnTouchYPlus.setOnClickListener {
+            it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            TouchPrefs.setYOffset(this, TouchPrefs.yOffset + 6)
+            refreshTouchOffsetUi()
+        }
+        btnTouchYReset.setOnClickListener {
+            it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            TouchPrefs.setYOffset(this, TouchPrefs.DEFAULT_Y_OFFSET)
+            refreshTouchOffsetUi()
         }
 
         // 5. Bike Profile Override
@@ -978,7 +1001,8 @@ class MainActivity : AppCompatActivity() {
         val offsetX = margins.marginW * 0.5f
         val offsetY = margins.marginH * 0.5f
         val sx = (offsetX + normX * usableW).toInt().coerceIn(0, spec.width - 1)
-        val sy = (offsetY + normY * usableH).toInt().coerceIn(0, spec.height - 1)
+        val rawSy = (offsetY + normY * usableH).toInt() + TouchPrefs.yOffset
+        val sy = rawSy.coerceIn(0, spec.height - 1)
         return sx to sy
     }
 
@@ -1046,7 +1070,8 @@ class MainActivity : AppCompatActivity() {
             val offsetX = margins.marginW * 0.5f
             val offsetY = margins.marginH * 0.5f
             val sx = (offsetX + (clampedX / pw) * usableW).toInt().coerceIn(0, spec.width - 1)
-            val sy = (offsetY + (clampedY / ph) * usableH).toInt().coerceIn(0, spec.height - 1)
+            val rawSy = (offsetY + (clampedY / ph) * usableH).toInt() + TouchPrefs.yOffset
+            val sy = rawSy.coerceIn(0, spec.height - 1)
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -1142,11 +1167,13 @@ class MainActivity : AppCompatActivity() {
         ConnectionState.listener = { phase, detail ->
             runOnUiThread {
                 updateConnectionUI(phase, detail)
+                checkServerPort()
             }
         }
         AaVideoBridge.fpsListener = { fps ->
             runOnUiThread {
                 updateFpsAndPlaceholderUi(fps)
+                checkServerPort()
             }
         }
         BikeAutoWatcher.statusListener = { _, reasonTh ->
@@ -1242,73 +1269,51 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Pure status read — ZERO socket I/O. Gearhead 17.9's head unit server (:5277) treats every
+     * accepted TCP socket as a real head unit; a throwaway "is it listening?" probe here used to
+     * crash its `:projection` process with `IllegalStateException: Already connected` every time
+     * the rider came back from Android Auto settings (onResume). The receiver's coordinator owns
+     * the only :5277 socket and publishes the outcome in [AaVideoBridge.headunitStatus].
+     */
     private fun checkServerPort(fromUserClick: Boolean = false) {
-        val isLive = AaVideoBridge.aaSessionLive
-        val isRunning = SessionService.isRunning
-        if (isLive) {
-            tvServerStatus.text = "● สตรีม Android Auto กำลังทำงานสด"
-            tvServerStatus.setTextColor(ContextCompat.getColor(this, R.color.green_neon))
-            if (fromUserClick) {
-                Toast.makeText(this, "สตรีม Android Auto กำลังทำงานสด", Toast.LENGTH_SHORT).show()
-            }
+        val running = SessionService.isRunning
+        val judgment = ProjectionHarness.evaluateServerStatusUi(
+            sessionRunning = running,
+            handshakeLive = AaVideoBridge.aaSessionLive,
+            decoding = AaVideoBridge.aaDecoding,
+            fps = AaVideoBridge.currentFps,
+            headunit = AaVideoBridge.headunitStatus,
+        )
+        tvServerStatus.text = judgment.text
+        val color = when (judgment.level) {
+            ProjectionHarness.UiLevel.OK -> R.color.green_neon
+            ProjectionHarness.UiLevel.BUSY -> R.color.cyan_neon
+            ProjectionHarness.UiLevel.WARN -> R.color.amber_accent
+            ProjectionHarness.UiLevel.ERROR -> R.color.ruby_bright
+            ProjectionHarness.UiLevel.NEUTRAL -> R.color.text_secondary
+        }
+        tvServerStatus.setTextColor(ContextCompat.getColor(this, color))
+        if (!fromUserClick) return
+
+        if (running) {
+            Toast.makeText(this, judgment.text.removePrefix("● "), Toast.LENGTH_SHORT).show()
             return
         }
-        if (isRunning) {
-            tvServerStatus.text = "● กำลังเชื่อมต่อ Android Auto / รถ"
-            tvServerStatus.setTextColor(ContextCompat.getColor(this, R.color.cyan_neon))
-            if (fromUserClick) {
-                Toast.makeText(this, "ระบบกำลังดำเนินการเชื่อมต่อ...", Toast.LENGTH_SHORT).show()
+        AlertDialog.Builder(this)
+            .setTitle("เซิร์ฟเวอร์เฮดยูนิต (:5277)")
+            .setMessage(
+                "RideLink จะไม่ \"เคาะ\" พอร์ต :5277 เพื่อตรวจสถานะ เพราะ Android Auto 17.9 จะล่มทันที " +
+                    "(Already connected) แล้วต้องเปิดเซิร์ฟเวอร์ใหม่\n\n" +
+                    "ระบบจะตรวจด้วยการเชื่อมต่อจริงเพียงครั้งเดียวเมื่อกด 'เริ่มเชื่อมต่อ' และจะลองต่อใหม่ให้อัตโนมัติ\n\n" +
+                    "หากยังไม่ได้เปิด: Android Auto → แตะ Version 10 ครั้ง → ⋮ → Start head unit server"
+            )
+            .setPositiveButton("เริ่มเชื่อมต่อ") { _, _ ->
+                startAutoProjection("กำลังเริ่มการเชื่อมต่อ Android Auto...")
             }
-            return
-        }
-
-        tvServerStatus.text = "● กำลังตรวจสถานะเซิร์ฟเวอร์..."
-        tvServerStatus.setTextColor(ContextCompat.getColor(this, R.color.amber_accent))
-
-        lifecycleScope.launch {
-            val isListening = withContext(Dispatchers.IO) {
-                isPortListening(5277, 400)
-            }
-            if (isFinishing || isDestroyed) return@launch
-
-            if (isListening) {
-                tvServerStatus.text = "● เซิร์ฟเวอร์เฮดยูนิต: เปิดอยู่ (:5277 พร้อมเชื่อมต่อ)"
-                tvServerStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.green_neon))
-                if (fromUserClick) {
-                    Toast.makeText(this@MainActivity, "เซิร์ฟเวอร์เฮดยูนิตเปิดอยู่ (:5277) พร้อมทำงาน", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                tvServerStatus.text = "● เซิร์ฟเวอร์เฮดยูนิต: ปิดอยู่ (แตะเปิดตั้งค่า AA)"
-                tvServerStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.ruby_bright))
-                if (fromUserClick) {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "เซิร์ฟเวอร์เฮดยูนิตปิดอยู่! กรุณากดปุ่ม 3 จุดใน Android Auto แล้วเลือก 'Start headunit server'",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        }
-    }
-
-    private fun isPortListening(port: Int, timeoutMs: Int = 400): Boolean {
-        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        val bound = try { cm?.boundNetworkForProcess } catch (_: Exception) { null }
-        if (bound != null) {
-            try { cm?.bindProcessToNetwork(null) } catch (_: Exception) {}
-        }
-        for (host in arrayOf("127.0.0.1", "localhost", "::1")) {
-            try {
-                Socket().use { s ->
-                    s.reuseAddress = true
-                    s.connect(InetSocketAddress(host, port), timeoutMs)
-                    return true
-                }
-            } catch (_: Exception) {
-                // Try next
-            }
-        }
-        return false
+            .setNeutralButton("เปิดตั้งค่า Android Auto") { _, _ -> openAndroidAutoSettings() }
+            .setNegativeButton("ปิด", null)
+            .show()
     }
 
     private fun openAndroidAutoSettings() {
@@ -1459,6 +1464,17 @@ class MainActivity : AppCompatActivity() {
         tvMarginBottom.text = "ขอบล่าง: ${ScreenMargins.bottom} px"
         tvMarginLeft.text = "ขอบซ้าย: ${ScreenMargins.left} px"
         tvMarginRight.text = "ขอบขวา: ${ScreenMargins.right} px"
+        refreshTouchOffsetUi()
+    }
+
+    private fun refreshTouchOffsetUi() {
+        val cur = TouchPrefs.yOffset
+        val label = when {
+            cur < 0 -> "$cur px (ชดเชยขึ้น)"
+            cur > 0 -> "+$cur px (ชดเชยลง)"
+            else -> "0 px (พอดีตรงกลาง)"
+        }
+        tvTouchYOffset.text = label
     }
 
     private fun updateTftStatusText() {

@@ -67,8 +67,14 @@ object AaVideoBridge {
         }
     }
 
-    /** True while an AAP session is up on :5288 / :5277. */
+    /** True while an AAP session is up on :5288 / :5277 (set only AFTER version+TLS handshake). */
     @Volatile var aaSessionLive: Boolean = false
+
+    /** True while a claimed socket is running the AAP handshake (not yet live). */
+    @Volatile var aaHandshaking: Boolean = false
+
+    /** Last outcome of the coordinator's real :5277 attempt — the UI reads this, never probes. */
+    @Volatile var headunitStatus: ProjectionHarness.HeadunitLinkStatus = ProjectionHarness.HeadunitLinkStatus.UNKNOWN
 
     /** True if an AAP session came up at least once this Connect. */
     @Volatile var aaSessionSeen: Boolean = false
@@ -116,6 +122,7 @@ object AaVideoBridge {
     /** Reset all transient session flags cleanly between reconnects. */
     fun resetSessionState() {
         aaSessionLive = false
+        aaHandshaking = false
         aaSessionSeen = false
         aaDecoding = false
         currentFps = 0

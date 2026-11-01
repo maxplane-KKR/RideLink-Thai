@@ -96,22 +96,68 @@ class AapTransport(
         Utils.intToBytes(ba.limit - AapMessage.HEADER_SIZE, 2, ba.data)
         val size = connection?.sendBlocking(ba.data, ba.limit, 250) ?: -1
         if (AaLog.LOG_VERBOSE) AaLog.v("Sent size: %d", size)
-        return 0
+        return if (size < 0) -1 else 0
     }
+
+    /** True once version + TLS + STATUS_OK completed for this transport. */
+    @Volatile var handshakeComplete: Boolean = false
+        private set
+
+    /** Set before a LOCAL stop so [onQuit] listeners can tell it apart from a peer drop. */
+    @Volatile var localShutdown: Boolean = false
+        private set
 
     internal fun stop() {
-        AaLog.i("AapTransport stopping and sending byebye")
-        val byebye = Control.ByeByeRequest.newBuilder().setReason(Control.ByeByeReason.USER_SELECTION).build()
-        send(AapMessage(Channel.ID_CTR, Control.ControlMsgType.MESSAGE_BYEBYE_REQUEST_VALUE, byebye))
-        SystemClock.sleep(150)
-        quit()
+        stopGracefully()
     }
 
+    /**
+     * Graceful, bounded teardown — call from a background thread, never the main looper.
+     * Sends ByeByeRequest through the send thread (keeps SSL state single-threaded), waits at most
+     * [BYEBYE_SEND_TIMEOUT_MS] for it to be written, flushes briefly, closes the connection FIRST
+     * (so the poll thread wakes immediately instead of hitting the join timeout), then quits.
+     * @return true when ByeBye was actually written to the peer.
+     */
+    internal fun stopGracefully(): Boolean {
+        localShutdown = true
+        AaLog.i("AapTransport graceful stop (handshakeComplete=$handshakeComplete)")
+        val result = AapTeardown.close(
+            connection = connection,
+            handshakeComplete = handshakeComplete,
+            sendByeBye = { sendByeByeBlocking(BYEBYE_SEND_TIMEOUT_MS) },
+        )
+        quit(clean = true)
+        return result.graceful
+    }
+
+    private fun sendByeByeBlocking(timeoutMs: Long): Boolean {
+        val handler = sendHandler ?: return false
+        val byebye = Control.ByeByeRequest.newBuilder().setReason(Control.ByeByeReason.USER_SELECTION).build()
+        val msg = AapMessage(Channel.ID_CTR, Control.ControlMsgType.MESSAGE_BYEBYE_REQUEST_VALUE, byebye)
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val ok = java.util.concurrent.atomic.AtomicBoolean(false)
+        val posted = handler.post {
+            try { ok.set(sendEncryptedMessage(msg.data, msg.size) >= 0) } catch (_: Exception) {}
+            latch.countDown()
+        }
+        if (!posted) return false
+        return try {
+            latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) && ok.get()
+        } catch (_: InterruptedException) {
+            false
+        }
+    }
+
+    private val quitStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+
     internal fun quit(clean: Boolean = false) {
-        val cb = onQuit ?: return
+        // Local stop closes the socket, which also makes the poll thread call quit(): only the
+        // first caller runs the teardown.
+        if (!quitStarted.compareAndSet(false, true)) return
+        val cb = onQuit
         onQuit = null
-        AaLog.i("AapTransport quitting (clean=$clean)")
-        cb.invoke(clean)
+        AaLog.i("AapTransport quitting (clean=$clean, local=$localShutdown)")
+        try { cb?.invoke(clean) } catch (e: Exception) { AaLog.e("onQuit failed", e) }
         pollThread?.quit()
         sendThread?.quit()
         aapVideo.release()
@@ -149,6 +195,7 @@ class AapTransport(
             AaLog.e("Handshake failed")
             return false
         }
+        handshakeComplete = true
         return true
     }
 
@@ -259,6 +306,7 @@ class AapTransport(
         private const val MSG_POLL = 1
         private const val MSG_SEND = 2
         private const val HANDSHAKE_TIMEOUT_MS = 10_000L
+        private const val BYEBYE_SEND_TIMEOUT_MS = 250L
         /** Sensors.SensorType.NIGHT value (see proto). */
         private const val SENSOR_NIGHT = 10
     }

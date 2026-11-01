@@ -69,6 +69,11 @@ class AaInput(
     private val pointers = LinkedHashMap<Int, Pair<Int, Int>>()
     private val keyExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
+    /** Stop the key-press worker when the session ends (prevents a leaked thread per session). */
+    fun shutdown() {
+        try { keyExecutor.shutdownNow() } catch (_: Exception) {}
+    }
+
     /**
      * Send one key press (down then up with non-zero duration) to Android Auto over the INPUT channel.
      * Android Auto / Gearhead drops simultaneous DOWN/UP events (0ms gap), so a 75ms hold duration

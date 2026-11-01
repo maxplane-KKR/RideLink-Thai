@@ -244,6 +244,206 @@ object ProjectionHarness {
     }
 
     fun clampManualDpi(dpi: Int): Int = dpi.coerceIn(MIN_MANUAL_DPI, MAX_MANUAL_DPI)
+
+    // =========================================================================
+    // 5. Head Unit Server (:5277) / Self-Mode (:5288) Connect Coordinator
+    // =========================================================================
+    //
+    // Gearhead 17.9's DeveloperHeadUnitNetworkService treats EVERY accepted TCP socket on :5277 as
+    // a real head unit session. A second socket while the previous one is still tearing down throws
+    // `IllegalStateException: Already connected` and kills the whole `:projection` process — the
+    // Head Unit Server then stays dead until the rider restarts it by hand in AA settings.
+    // So: one socket at a time, a settle window after every teardown, and no throwaway probes.
+
+    /** Settle window after we closed the previous session WITH an AAP ByeByeRequest. */
+    const val SETTLE_AFTER_BYEBYE_MS = 300L
+    /** Settle window after an ungraceful drop (EOF / failed handshake) — Gearhead lingers longer. */
+    const val SETTLE_AFTER_UNGRACEFUL_MS = 1_500L
+    /** Poll interval while a session is handshaking/live. */
+    const val SESSION_HOLD_POLL_MS = 500L
+    const val REFUSED_RETRY_FIRST_MS = 1_500L
+    const val REFUSED_RETRY_MS = 2_000L
+    const val HANDSHAKE_BACKOFF_BASE_MS = 1_000L
+    const val MAX_RETRY_BACKOFF_MS = 8_000L
+    const val REFUSALS_BEFORE_GUIDANCE = 5
+    const val HANDSHAKE_FAILURES_BEFORE_GUIDANCE = 3
+
+    enum class AaConnectAction {
+        STOP,
+        HOLD_SESSION_ACTIVE,
+        WAIT_SETTLE_COOLDOWN,
+        DIAL_HEADUNIT_5277,
+        TRIGGER_SELF_MODE_AND_RETRY_5277,
+        SURFACE_HEADUNIT_ACTION_NEEDED,
+    }
+
+    data class AaConnectInput(
+        val running: Boolean,
+        /** A socket is claimed (handshaking) or an AAP session is live on :5277 or :5288. */
+        val sessionBusy: Boolean,
+        /** A ByeBye/close of the previous session is still running on a background thread. */
+        val teardownInProgress: Boolean,
+        /** Long.MAX_VALUE when there was no previous teardown in this process. */
+        val msSinceLastTeardown: Long,
+        val lastTeardownGraceful: Boolean,
+        /** Long.MAX_VALUE when never dialled in this receiver. */
+        val msSinceLastDial: Long,
+        val consecutiveRefusals: Int,
+        val consecutiveHandshakeFailures: Int,
+        val selfModeFallbackTriggered: Boolean,
+        val guidanceSurfaced: Boolean,
+    )
+
+    data class AaConnectJudgment(
+        val action: AaConnectAction,
+        val delayMs: Long,
+        val reasonTh: String,
+    )
+
+    fun retryIntervalMs(consecutiveRefusals: Int, consecutiveHandshakeFailures: Int): Long {
+        if (consecutiveHandshakeFailures > 0) {
+            val shift = (consecutiveHandshakeFailures - 1).coerceIn(0, 10)
+            return (HANDSHAKE_BACKOFF_BASE_MS shl shift).coerceAtMost(MAX_RETRY_BACKOFF_MS)
+        }
+        return when {
+            consecutiveRefusals <= 0 -> 0L
+            consecutiveRefusals == 1 -> REFUSED_RETRY_FIRST_MS
+            else -> REFUSED_RETRY_MS
+        }
+    }
+
+    fun evaluateAaConnectStep(input: AaConnectInput): AaConnectJudgment {
+        if (!input.running) {
+            return AaConnectJudgment(AaConnectAction.STOP, 0L, "หยุดตัวรับ Android Auto แล้ว")
+        }
+        if (input.sessionBusy) {
+            return AaConnectJudgment(
+                AaConnectAction.HOLD_SESSION_ACTIVE, SESSION_HOLD_POLL_MS,
+                "มีเซสชัน Android Auto อยู่แล้ว — ไม่เปิดซ็อกเก็ต :5277 ซ้อน",
+            )
+        }
+        if (input.teardownInProgress) {
+            return AaConnectJudgment(
+                AaConnectAction.WAIT_SETTLE_COOLDOWN, 100L,
+                "กำลังปิดเซสชันเดิมด้วย ByeBye — รอก่อนต่อ :5277",
+            )
+        }
+        val settle = if (input.lastTeardownGraceful) SETTLE_AFTER_BYEBYE_MS else SETTLE_AFTER_UNGRACEFUL_MS
+        if (input.msSinceLastTeardown in 0 until settle) {
+            return AaConnectJudgment(
+                AaConnectAction.WAIT_SETTLE_COOLDOWN, settle - input.msSinceLastTeardown,
+                "รอเซิร์ฟเวอร์เฮดยูนิตคืนสถานะเซสชันเดิม",
+            )
+        }
+        if (input.consecutiveRefusals >= 1 && !input.selfModeFallbackTriggered) {
+            return AaConnectJudgment(
+                AaConnectAction.TRIGGER_SELF_MODE_AND_RETRY_5277, 0L,
+                "ไม่พบเซิร์ฟเวอร์ :5277 — เรียก Self-Mode สู่ :5288 และลอง :5277 ต่อ",
+            )
+        }
+        if (!input.guidanceSurfaced) {
+            if (input.consecutiveHandshakeFailures >= HANDSHAKE_FAILURES_BEFORE_GUIDANCE) {
+                return AaConnectJudgment(
+                    AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED, 0L,
+                    "เซิร์ฟเวอร์เฮดยูนิต (:5277) ค้าง — ใน Android Auto กด ⋮ → Stop แล้ว Start head unit server",
+                )
+            }
+            if (input.consecutiveRefusals >= REFUSALS_BEFORE_GUIDANCE) {
+                return AaConnectJudgment(
+                    AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED, 0L,
+                    "เซิร์ฟเวอร์เฮดยูนิต (:5277) ยังไม่เปิด — ใน Android Auto กด ⋮ → Start head unit server",
+                )
+            }
+        }
+        val interval = retryIntervalMs(input.consecutiveRefusals, input.consecutiveHandshakeFailures)
+        if (input.msSinceLastDial in 0 until interval) {
+            return AaConnectJudgment(
+                AaConnectAction.WAIT_SETTLE_COOLDOWN, interval - input.msSinceLastDial,
+                "รอรอบถัดไปก่อนลอง :5277 อีกครั้ง",
+            )
+        }
+        return AaConnectJudgment(AaConnectAction.DIAL_HEADUNIT_5277, 0L, "เชื่อมต่อเซิร์ฟเวอร์เฮดยูนิต :5277")
+    }
+
+    // =========================================================================
+    // 6. Server Status UI (derived from coordinator facts — ZERO socket probes)
+    // =========================================================================
+
+    /** Last outcome of the coordinator's single, real :5277 attempt (published by AaReceiver). */
+    enum class HeadunitLinkStatus { UNKNOWN, CONNECTED, REFUSED, HANDSHAKE_FAILED }
+
+    enum class UiLevel { OK, BUSY, WARN, ERROR, NEUTRAL }
+
+    data class ServerUiJudgment(val text: String, val level: UiLevel)
+
+    fun evaluateServerStatusUi(
+        sessionRunning: Boolean,
+        handshakeLive: Boolean,
+        decoding: Boolean,
+        fps: Int,
+        headunit: HeadunitLinkStatus,
+    ): ServerUiJudgment {
+        if (sessionRunning && (decoding || fps > 0)) {
+            return ServerUiJudgment("● สตรีม Android Auto กำลังทำงานสด", UiLevel.OK)
+        }
+        if (sessionRunning && handshakeLive) {
+            return ServerUiJudgment("● เชื่อม Android Auto แล้ว — รอภาพแรก", UiLevel.OK)
+        }
+        return when (headunit) {
+            HeadunitLinkStatus.REFUSED -> ServerUiJudgment(
+                if (sessionRunning) "● เซิร์ฟเวอร์เฮดยูนิต (:5277) ยังไม่เปิด — แตะเพื่อเปิดตั้งค่า Android Auto"
+                else "● รอบก่อนไม่พบเซิร์ฟเวอร์เฮดยูนิต (:5277) — แตะเพื่อเปิดตั้งค่า Android Auto",
+                UiLevel.WARN,
+            )
+            HeadunitLinkStatus.HANDSHAKE_FAILED -> ServerUiJudgment(
+                "● เซิร์ฟเวอร์เฮดยูนิต (:5277) ค้าง — แตะเพื่อรีเซ็ตในตั้งค่า Android Auto",
+                UiLevel.ERROR,
+            )
+            else -> if (sessionRunning) {
+                ServerUiJudgment("● กำลังเชื่อมต่อ Android Auto / รถ", UiLevel.BUSY)
+            } else {
+                ServerUiJudgment("● สแตนด์บาย — ตรวจ :5277 อัตโนมัติเมื่อกดเริ่มเชื่อมต่อ", UiLevel.NEUTRAL)
+            }
+        }
+    }
+
+    // =========================================================================
+    // 7. Bike Bluetooth MAC selection (START_WIRELESS_PROJECTION)
+    // =========================================================================
+
+    data class BtDeviceCandidate(val address: String, val name: String?, val connected: Boolean)
+
+    private val ACCESSORY_DENY = listOf(
+        "watch", "buds", "airpods", "earbud", "headphone", "headset", "band", "fitbit", "garmin",
+        "amazfit", "pods", "speaker", "keyboard", "mouse",
+    )
+    private val HEX_NAME_REGEX = Regex("^[0-9A-Fa-f]{8,16}$")
+    private val BIKE_KEYWORDS = listOf(
+        "Zontes", "Carbit", "EasyConn", "150", "310", "350", "368", "703", "CFMOTO", "CFDL", "Bike",
+        "Moto", "VOGE", "QJ", "Benelli", "Morini", "Alltrhike", "Kove",
+    )
+
+    fun isBikeDeviceName(name: String?, savedSsids: List<String>): Boolean {
+        val n = name?.trim().orEmpty()
+        if (n.isEmpty()) return false
+        if (ACCESSORY_DENY.any { n.contains(it, ignoreCase = true) }) return false
+        for (candidate in savedSsids) {
+            val clean = candidate.trim()
+            if (clean.isBlank()) continue
+            if (n.contains(clean, ignoreCase = true)) return true
+            if (clean.length >= 6 && n.contains(clean.takeLast(6), ignoreCase = true)) return true
+            if (clean.length >= 4 && n.endsWith(clean.takeLast(4), ignoreCase = true)) return true
+        }
+        if (HEX_NAME_REGEX.matches(n)) return true
+        if (n.startsWith("ZT", ignoreCase = true)) return true
+        return BIKE_KEYWORDS.any { n.contains(it, ignoreCase = true) }
+    }
+
+    /** Connected bike cluster first, then a bonded bike cluster — never an arbitrary accessory. */
+    fun selectBikeBluetoothMac(candidates: List<BtDeviceCandidate>, savedSsids: List<String>): String? {
+        val bikes = candidates.filter { isBikeDeviceName(it.name, savedSsids) }
+        return (bikes.firstOrNull { it.connected } ?: bikes.firstOrNull())?.address
+    }
 }
 
 /**

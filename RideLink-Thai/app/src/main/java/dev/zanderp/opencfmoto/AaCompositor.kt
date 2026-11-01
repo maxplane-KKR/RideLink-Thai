@@ -284,7 +284,8 @@ class AaCompositor(private val log: (String) -> Unit) {
         val ry = cy - vpY
         if (rx < 0 || ry < 0 || rx >= vpW || ry >= vpH) return null
         val sx = (rx.toLong() * srcW / vpW).toInt().coerceIn(0, srcW - 1)
-        val sy = (ry.toLong() * srcH / vpH).toInt().coerceIn(0, srcH - 1)
+        val rawSy = (ry.toLong() * srcH / vpH).toInt() + TouchPrefs.yOffset
+        val sy = rawSy.coerceIn(0, srcH - 1)
         return sx to sy
     }
 
@@ -314,7 +315,9 @@ class AaCompositor(private val log: (String) -> Unit) {
         val offsetX = (1f - cu) * 0.5f * bw
         val offsetY = (1f - cv) * 0.5f * bh
         val sx = (offsetX + (rx.toFloat() / w) * (cu * bw)).toInt().coerceIn(0, bw - 1)
-        val sy = (offsetY + (ry.toFloat() / h) * (cv * bh)).toInt().coerceIn(0, bh - 1)
+        // Apply rider touch Y-offset calibration (shifts touch point up/down in AA source space)
+        val rawSy = (offsetY + (ry.toFloat() / h) * (cv * bh)).toInt() + TouchPrefs.yOffset
+        val sy = rawSy.coerceIn(0, bh - 1)
         return sx to sy
     }
 

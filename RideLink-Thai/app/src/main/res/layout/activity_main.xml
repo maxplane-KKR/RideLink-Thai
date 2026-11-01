@@ -1733,6 +1733,83 @@
                             android:textSize="10.5sp"
                             android:textStyle="bold" />
                     </LinearLayout>
+
+                    <!-- Calibration Touch Y Offset Tuning -->
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:layout_marginBottom="4dp"
+                        android:text="🎯 ปรับชดเชยจุดสัมผัสแนวตั้ง (Touch Y-Offset)"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="8dp"
+                        android:text="ขยับจุดรับสัมผัสขึ้น/ลง เพื่อให้ตรงตำแหน่งที่นิ้วแตะบนหน้าจอจริง"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="11.5sp" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:layout_marginBottom="8dp">
+
+                        <androidx.appcompat.widget.AppCompatButton
+                            android:id="@+id/btnTouchYMinus"
+                            android:layout_width="64dp"
+                            android:layout_height="48dp"
+                            android:background="@drawable/btn_liquid_pill"
+                            android:backgroundTint="@null"
+                            android:stateListAnimator="@null"
+                            android:text="▲ ขึ้น"
+                            android:textColor="@color/cyan_neon"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvTouchYOffset"
+                            android:layout_width="0dp"
+                            android:layout_height="48dp"
+                            android:layout_weight="1"
+                            android:layout_marginStart="6dp"
+                            android:layout_marginEnd="6dp"
+                            android:background="@drawable/card_inner_glass"
+                            android:gravity="center"
+                            android:text="-24 px (ชดเชยขึ้น)"
+                            android:textColor="@color/cyan_neon"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+
+                        <androidx.appcompat.widget.AppCompatButton
+                            android:id="@+id/btnTouchYPlus"
+                            android:layout_width="64dp"
+                            android:layout_height="48dp"
+                            android:background="@drawable/btn_liquid_pill"
+                            android:backgroundTint="@null"
+                            android:stateListAnimator="@null"
+                            android:text="▼ ลง"
+                            android:textColor="@color/cyan_neon"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <androidx.appcompat.widget.AppCompatButton
+                        android:id="@+id/btnTouchYReset"
+                        android:layout_width="match_parent"
+                        android:layout_height="42dp"
+                        android:background="@drawable/btn_liquid_pill"
+                        android:backgroundTint="@null"
+                        android:stateListAnimator="@null"
+                        android:text="รีเซ็ตค่ามาตรฐาน (-24px)"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="11.5sp"
+                        android:textStyle="bold" />
                 </LinearLayout>
 
                 <!-- Card 2: Bike Profile Selection (wrap_content + minHeight=48dp -> Zero Multi-line Clipping) -->
