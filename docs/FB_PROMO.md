@@ -17,7 +17,7 @@
 ✅ ฟรี! โอเพนซอร์ส โหลดติดตั้งได้ทันที ไม่ต้องตัดต่อสายไฟ ไม่หลุดประกัน
 
 ดาวน์โหลดและดูวิธีใช้งานได้ที่นี่เลยครับ 👇
-🔗 ดาวน์โหลด APK (ตัวล่าสุด v0.2.6): https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.6/RideLink-Thai-v0.2.6.apk
+🔗 ดาวน์โหลด APK (ตัวล่าสุด v0.2.7): https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.7/RideLink-Thai-v0.2.7.apk
 🔗 ดูรายละเอียดทั้งหมด: https://github.com/maxplane-KKR/RideLink-Thai
 
 #RideLinkTH #AndroidAuto #Zontes #CFMoto #GoogleMapsบนมอไซค์ #ของดีบอกต่อ
@@ -48,7 +48,7 @@
 โปรเจกต์โอเพนซอร์ส 100% ปลอดภัย ไม่ต้องแปลงสายไฟ ไม่ดัดแปลงกล่อง ECU ใดๆ ทั้งสิ้น
 
 👉 ดาวน์โหลดไฟล์ APK และดูวิธีเปิดโหมดเฮดยูนิตได้ที่ GitHub:
-🔗 ดาวน์โหลด APK (ตัวล่าสุด v0.2.6): https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.6/RideLink-Thai-v0.2.6.apk
+🔗 ดาวน์โหลด APK (ตัวล่าสุด v0.2.7): https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.7/RideLink-Thai-v0.2.7.apk
 🔗 ดูหน้าคู่มือ: https://github.com/maxplane-KKR/RideLink-Thai
 
 #ZontesClubThailand #CFMotoClubThailand #RideLink #AndroidAutoMoto #มอเตอร์ไซค์ไทย
@@ -68,4 +68,4 @@
 5️⃣ **มีชุดจอยควบคุมในตัว**: สำหรับจอรถที่ไม่มีทัชสกรีน ใช้งานง่ายแม้ใส่ถุงมือขับขี่
 
 ทดลองใช้งานได้ฟรีแล้ววันนี้ที่ GitHub 👇
-🔗 ดาวน์โหลด APK (ตัวล่าสุด v0.2.6): https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.6/RideLink-Thai-v0.2.6.apk
+🔗 ดาวน์โหลด APK (ตัวล่าสุด v0.2.7): https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.7/RideLink-Thai-v0.2.7.apk
