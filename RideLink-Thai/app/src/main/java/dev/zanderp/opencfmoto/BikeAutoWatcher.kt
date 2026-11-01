@@ -60,6 +60,12 @@ object BikeAutoWatcher {
     private val pollRunnable = object : Runnable {
         override fun run() {
             val ctx = appCtx ?: return
+            // If the app is in the background and no foreground session is running,
+            // stop the active polling loop immediately to prevent waking CPU and draining battery.
+            if (!appInForeground && !SessionService.isRunning) {
+                disarmPassiveWifiRequest(immediate = true)
+                return
+            }
             evaluateAndAct(ctx, qrWifiFromPassiveCallback = false)
             val delay = if (btConnected || appInForeground) POLL_INTERVAL_BT_ACTIVE_MS else POLL_INTERVAL_IDLE_MS
             if (AutoConnectPrefs.isAutoConnectEnabled(ctx) && !SessionService.isRunning && !manuallyStopped) {
@@ -80,39 +86,69 @@ object BikeAutoWatcher {
                         intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     }
                     val savedSsid = BikeMemory.selected(context)?.qr?.ssid
-                    val matchesBike = dev == null || AaSelfMode.isBikeDevice(dev, savedSsid)
-                    btConnected = true
-                    if (matchesBike && manuallyStopped) {
-                        // Fresh bike ignition / BT reconnect clears previous ride's manual stop.
-                        manuallyStopped = false
+                    val allSsids = BikeMemory.devices(context).mapNotNull { it.qr?.ssid }
+                    val matchesBike = dev != null && AaSelfMode.isBikeDevice(dev, savedSsid, allSsids)
+                    if (matchesBike) {
+                        btConnected = true
+                        if (manuallyStopped) {
+                            // Fresh bike ignition / BT reconnect clears previous ride's manual stop.
+                            manuallyStopped = false
+                        }
+                        LogBus.log("[AutoBT] บลูทูธรถเชื่อมต่อแล้ว (${dev.name}) — เฝ้ารอสัญญาณหน้าเมนู QR")
+                        if (appInForeground) {
+                            kickWatchLoop(context)
+                        } else {
+                            notifyUi(context)
+                        }
+                    } else {
+                        // Non-bike device connected (smartwatch, earbud, car, etc.) - ignore!
                     }
-                    LogBus.log("[AutoBT] Bluetooth connected (bikeMatch=$matchesBike) — เฝ้ารอสัญญาณหน้าเมนู QR")
-                    kickWatchLoop(context)
                 }
 
                 BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                    val stillConnected = AaSelfMode.hasConnectedBluetooth(context)
-                    btConnected = stillConnected
-                    if (!stillConnected) {
-                        // Bike switched off -> clear manual stop so the next ride auto-connects cleanly.
-                        manuallyStopped = false
-                        LogBus.log("[AutoBT] Bluetooth disconnected — รีเซ็ตสถานะพร้อมสำหรับรอบถัดไป")
+                    val dev: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     }
-                    evaluateAndAct(context, qrWifiFromPassiveCallback = false)
+                    val savedSsid = BikeMemory.selected(context)?.qr?.ssid
+                    val allSsids = BikeMemory.devices(context).mapNotNull { it.qr?.ssid }
+                    if (dev == null || AaSelfMode.isBikeDevice(dev, savedSsid, allSsids)) {
+                        val stillConnected = AaSelfMode.hasConnectedBluetooth(context)
+                        btConnected = stillConnected
+                        if (!stillConnected) {
+                            // Bike switched off -> clear manual stop so the next ride auto-connects cleanly.
+                            manuallyStopped = false
+                            LogBus.log("[AutoBT] บลูทูธรถตัดการเชื่อมต่อ — รีเซ็ตสถานะพร้อมสำหรับรอบถัดไป")
+                        }
+                        if (appInForeground) {
+                            evaluateAndAct(context, qrWifiFromPassiveCallback = false)
+                        } else {
+                            disarmPassiveWifiRequest(immediate = true)
+                            notifyUi(context)
+                        }
+                    }
                 }
 
                 BluetoothAdapter.ACTION_STATE_CHANGED,
                 BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED -> {
                     btConnected = AaSelfMode.hasConnectedBluetooth(context)
-                    kickWatchLoop(context)
+                    if (appInForeground) {
+                        kickWatchLoop(context)
+                    } else {
+                        notifyUi(context)
+                    }
                 }
 
                 WifiManager.SCAN_RESULTS_AVAILABLE_ACTION -> {
-                    val now = SystemClock.elapsedRealtime()
-                    if (now - lastScanEvalElapsedMs >= 5_000L) {
-                        lastScanEvalElapsedMs = now
-                        if (!SessionService.isRunning && !manuallyStopped) {
-                            evaluateAndAct(context, qrWifiFromPassiveCallback = false)
+                    if (appInForeground) {
+                        val now = SystemClock.elapsedRealtime()
+                        if (now - lastScanEvalElapsedMs >= 5_000L) {
+                            lastScanEvalElapsedMs = now
+                            if (!SessionService.isRunning && !manuallyStopped) {
+                                evaluateAndAct(context, qrWifiFromPassiveCallback = false)
+                            }
                         }
                     }
                 }
@@ -143,12 +179,21 @@ object BikeAutoWatcher {
                 LogBus.log("[AutoBT] registerReceiver warning: ${e.message}")
             }
         }
-        kickWatchLoop(app)
+        if (appInForeground) {
+            kickWatchLoop(app)
+        }
     }
 
     fun onAppForegroundChanged(context: Context, inForeground: Boolean) {
         appInForeground = inForeground
-        init(context)
+        if (!inForeground) {
+            // When leaving foreground, immediately stop polling and disarm passive specifiers
+            // to conform to Android OS background restrictions and save battery.
+            disarmPassiveWifiRequest(immediate = true)
+            mainHandler.removeCallbacks(pollRunnable)
+        } else {
+            init(context)
+        }
     }
 
     fun onManualStop(context: Context) {
@@ -221,7 +266,7 @@ object BikeAutoWatcher {
         btConnected = AaSelfMode.hasConnectedBluetooth(app)
         val qr = BikeMemory.selected(app)?.qr
         val ssid = qr?.ssid
-        val inScan = if (!ssid.isNullOrBlank() && !SessionService.isRunning) {
+        val inScan = if (!ssid.isNullOrBlank() && !SessionService.isRunning && appInForeground) {
             BikeWifi.isSsidInRange(app, ssid) == true
         } else {
             false
@@ -272,6 +317,11 @@ object BikeAutoWatcher {
     }
 
     private fun ensurePassiveWifiArmed(app: Context, ssid: String, psk: String) {
+        // Android OS strictly forbids WifiNetworkSpecifier requests if not called from
+        // a foreground activity or an active foreground service.
+        if (!appInForeground && !SessionService.isRunning) {
+            return
+        }
         if (passiveCallback != null && passiveArmedSsid.equals(ssid, ignoreCase = true)) {
             return
         }
@@ -297,11 +347,10 @@ object BikeAutoWatcher {
             }
 
             override fun onUnavailable() {
-                // Normal while the rider hasn't pressed SET to open the QR screen yet.
-                // Clear callback silently and re-arm on next poll tick if BT is still connected.
+                // In Android OS, ConnectivityService automatically unregisters this callback on unavailable.
+                // Do NOT call cm.unregisterNetworkCallback(this) here as it logs "NetworkCallback was already unregistered".
                 mainHandler.post {
                     if (passiveCallback === this) {
-                        try { cm.unregisterNetworkCallback(this) } catch (_: Exception) {}
                         passiveCallback = null
                         passiveArmedSsid = null
                     }
@@ -311,7 +360,6 @@ object BikeAutoWatcher {
             override fun onLost(network: Network) {
                 mainHandler.post {
                     if (passiveCallback === this) {
-                        try { cm.unregisterNetworkCallback(this) } catch (_: Exception) {}
                         passiveCallback = null
                         passiveArmedSsid = null
                     }

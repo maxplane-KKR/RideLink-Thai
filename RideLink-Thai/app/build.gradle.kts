@@ -21,8 +21,8 @@ android {
         applicationId = "app.ridelink.thai"
         minSdk = 29
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.2.6"
+        versionCode = 9
+        versionName = "0.2.7"
         manifestPlaceholders["appLabel"] = "RideLinkไทย"
         buildConfigField("String", "GIT_HASH", "\"ridelink-thai\"")
     }

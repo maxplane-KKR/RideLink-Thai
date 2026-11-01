@@ -263,30 +263,37 @@ object AaSelfMode {
         }
     }
 
-    /** True when at least one bonded Bluetooth device (bike cluster or headset) is actively connected. */
+    /** True when at least one bonded Bluetooth device matching a bike cluster is actively connected. */
     fun hasConnectedBluetooth(context: Context): Boolean {
         if (!canAttemptHur(context)) return false
         return try {
             val mgr = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
             val adapter = mgr?.adapter ?: return false
             val savedSsid = dev.zanderp.opencfmoto.BikeMemory.selected(context)?.qr?.ssid
+            val allSsids = dev.zanderp.opencfmoto.BikeMemory.devices(context).mapNotNull { it.qr?.ssid }
             val bonded = adapter.bondedDevices?.toList().orEmpty()
-            if (bonded.any { it.isConnectedCompat() && isBikeDevice(it, savedSsid) }) return true
-            if (bonded.any { it.isConnectedCompat() }) return true
-            adapter.getProfileConnectionState(BluetoothProfile.A2DP) == BluetoothProfile.STATE_CONNECTED ||
-                adapter.getProfileConnectionState(BluetoothProfile.HEADSET) == BluetoothProfile.STATE_CONNECTED
+            // Strict bike check: device must be actively connected AND match known bike names/SSID.
+            // Never treat random accessories (smartwatches, fitness trackers, earbuds) as the motorcycle.
+            bonded.any { it.isConnectedCompat() && isBikeDevice(it, savedSsid, allSsids) }
         } catch (_: Exception) {
             false
         }
     }
 
-    fun isBikeDevice(device: BluetoothDevice, savedSsid: String? = null): Boolean {
+    fun isBikeDevice(
+        device: BluetoothDevice,
+        savedSsid: String? = null,
+        allSavedSsids: List<String> = emptyList(),
+    ): Boolean {
         val n = try { device.name } catch (_: SecurityException) { null } ?: return false
-        if (!savedSsid.isNullOrBlank()) {
-            val clean = savedSsid.trim()
-            if (n.equals(clean, ignoreCase = true) || n.contains(clean, ignoreCase = true)) return true
-            if (clean.length >= 6 && n.contains(clean.takeLast(6), ignoreCase = true)) return true
-            if (clean.length >= 4 && n.endsWith(clean.takeLast(4), ignoreCase = true)) return true
+        val ssidsToCheck = if (savedSsid != null) listOf(savedSsid) + allSavedSsids else allSavedSsids
+        for (candidate in ssidsToCheck) {
+            val clean = candidate.trim()
+            if (clean.isNotBlank()) {
+                if (n.equals(clean, ignoreCase = true) || n.contains(clean, ignoreCase = true)) return true
+                if (clean.length >= 6 && n.contains(clean.takeLast(6), ignoreCase = true)) return true
+                if (clean.length >= 4 && n.endsWith(clean.takeLast(4), ignoreCase = true)) return true
+            }
         }
         if (n.matches(Regex("^[0-9A-Fa-f]{8,16}$"))) return true
         return n.contains("Zontes", ignoreCase = true) ||
