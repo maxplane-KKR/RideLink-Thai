@@ -92,7 +92,7 @@
     <string name="app_language_toggle">EN</string>
     <string name="gear_title">OBD2 ที่แนะนำ</string>
     <string name="gear_button">เลือกซื้อ</string>
-    <string name="gear_url">https://ridelink-th.netlify.app/#obd2</string>
+    <string name="gear_url">https://ridelink-th.pages.dev/#obd2</string>
     <string name="gear_browser_unavailable">ไม่พบแอปสำหรับเปิดเว็บไซต์</string>
     <string name="qr_torch_off">ปิดไฟฉาย</string>
     <string name="headunit_dialog_message">เปิด Android Auto แล้วเลือก ⋮ → Start head unit server จากนั้นกลับมาที่ RideLink แอปจะตรวจ Head Unit ขณะสแตนด์บาย เมื่อขึ้นว่าเปิดแล้วจึงพร้อมเริ่มเชื่อมต่อรถ</string>
