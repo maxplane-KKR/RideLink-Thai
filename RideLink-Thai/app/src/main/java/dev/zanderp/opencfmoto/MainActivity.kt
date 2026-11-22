@@ -274,6 +274,15 @@ class MainActivity : AppCompatActivity() {
         AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(next))
     }
 
+    private fun openGearWebsite() {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(getString(R.string.gear_url)))
+        try {
+            startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, R.string.gear_browser_unavailable, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -529,6 +538,7 @@ class MainActivity : AppCompatActivity() {
         paneTft = findViewById(R.id.paneTft)
         paneSettings = findViewById(R.id.paneSettings)
         findViewById<Button>(R.id.btnAppLanguage).setOnClickListener { changeAppLanguage() }
+        findViewById<Button>(R.id.btnOpenGear).setOnClickListener { openGearWebsite() }
 
         // Tab 3 & Tab 4 Views
         tvTftStatus = findViewById(R.id.tvTftStatus)
