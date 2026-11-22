@@ -15,7 +15,7 @@ object LogRedactor {
     private const val MASK = "«redacted»"
 
     private val JSON_SECRET = Regex(
-        """("(?:password|pwd|passphrase|psk|btPin)"\s*:\s*)"[^"]*"""",
+        """("(?:password|pwd|passphrase|psk|btPin|userName|token|access_token|refresh_token|secret|api_key|apiKey)"\s*:\s*)"[^"]*"""",
         RegexOption.IGNORE_CASE,
     )
     private val URL_SECRET = Regex(
@@ -30,6 +30,7 @@ object LogRedactor {
         """\b(carHuid|HUID|sn)=([A-Za-z0-9]{6,})""",
         RegexOption.IGNORE_CASE,
     )
+    private val HEX_PAYLOAD = Regex("""\bhex=[0-9a-f]+""", RegexOption.IGNORE_CASE)
 
     fun redact(line: String): String {
         var s = line
@@ -37,6 +38,7 @@ object LogRedactor {
         s = URL_SECRET.replace(s) { m -> m.groupValues[1] + "=" + MASK }
         s = JSON_SERIAL.replace(s) { m -> m.groupValues[1] + "\"" + maskTail(m.groupValues[2]) + "\"" }
         s = BARE_SERIAL.replace(s) { m -> m.groupValues[1] + "=" + maskTail(m.groupValues[2]) }
+        s = HEX_PAYLOAD.replace(s, "hex=$MASK")
         return s
     }
 

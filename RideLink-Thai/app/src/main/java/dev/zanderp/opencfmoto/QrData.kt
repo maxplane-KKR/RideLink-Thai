@@ -294,33 +294,33 @@ data class QrData(
         /**
          * Hint for failed scans (vehicle-info QR, app-download QR, etc.) — not a pairing code.
          */
-        fun parseFailureHint(raw: String): String? {
+        fun parseFailureHint(raw: String): Int? {
             val t = raw.trim()
             when {
                 t.contains("motomorini.com", ignoreCase = true) &&
                     !t.contains("Wifi=", ignoreCase = true) ->
-                    return "QR โค้ด Moto Morini นี้ไม่มีรหัส Wi-Fi — ให้เปิดหน้าจอรถไปที่เมนูเชื่อมต่อ/MotoFun"
+                    return R.string.qr_morini
                 Regex("""(?i)^code:.*engine:.*vin:""").containsMatchIn(t) ||
                     t.contains("color:", ignoreCase = true) && t.contains("vin:", ignoreCase = true) ->
-                    return "QR นี้เป็นข้อมูลประจำรถ (VIN/Engine) ไม่ใช่ Wi-Fi — โปรดเปิดหน้าจอไปที่เมนู MotoPlay/EasyConnect"
+                    return R.string.qr_vin
                 t.contains("carbit.com", ignoreCase = true) &&
                     t.contains("downsdk", ignoreCase = true) &&
                     !t.contains("ssid=", ignoreCase = true) ->
-                    return "QR นี้เป็นลิงก์ดาวน์โหลดแอป Carbit — โปรดเปิดเมนู MotoPlay/EasyConnect บนจอรถค้างไว้"
+                    return R.string.qr_carbit_link
                 t.contains("carbit.com", ignoreCase = true) &&
                     !t.contains("ssid=", ignoreCase = true) &&
                     (t.contains("action=128", ignoreCase = true) || t.contains("bm=", ignoreCase = true)) ->
-                    return "หน้าจอรุ่นนี้ใช้โหมด Hotspot มือถือ — โปรดเปิดฮอตสปอตบนมือถือตามชื่อ/รหัสที่ขึ้นบนจอรถ"
+                    return R.string.qr_hotspot
                 Regex("""(?i)^CARBIT[0-9A-F]{12}$""").containsMatchIn(t) ->
-                    return "Carbit ID QR — เปิดฮอตสปอตมือถือตามที่หน้าจอรถร้องขอ แล้วกดเชื่อมต่อ"
+                    return R.string.qr_carbit_id
                 t.contains("thinkerride.com", ignoreCase = true) ||
                     t.contains("kove", ignoreCase = true) && t.contains("download", ignoreCase = true) ||
                     t.contains("KOVE APP", ignoreCase = true) ->
-                    return "จอรถ Kove/Thinkerride — ต้องการ QR SoftAP จากจอรถ หรือกรอก SSID/รหัสผ่านในหน้ารถ"
+                    return R.string.qr_kove
                 t.startsWith("http", ignoreCase = true) &&
                     !t.contains("ssid=", ignoreCase = true) &&
                     !t.contains("Wifi=", ignoreCase = true) ->
-                    return "QR นี้เป็น URL ทั่วไป ไม่มีชื่อหรือรหัสผ่าน Wi-Fi รถ"
+                    return R.string.qr_generic_url
                 else -> return null
             }
         }

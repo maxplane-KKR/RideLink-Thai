@@ -83,6 +83,8 @@ class AaReceiver(
     @Volatile private var consecutiveRefusals = 0
     @Volatile private var consecutiveHandshakeFailures = 0
     @Volatile private var selfModeFallbackTriggered = false
+    @Volatile private var headunitVerified = false
+    @Volatile var allowSelfModeRecovery: Boolean = true
     @Volatile private var guidanceSurfaced = false
 
     /**
@@ -100,7 +102,8 @@ class AaReceiver(
     @Volatile var onNeedSelfModeFallback: (() -> Unit)? = null
 
     /** Thai rider guidance when the head unit server is off or wedged (coordinator keeps retrying). */
-    @Volatile var onHeadunitGuidance: ((String) -> Unit)? = null
+    @Volatile var onHeadunitGuidance: ((Int) -> Unit)? = null
+    @Volatile var onHeadunitConnected: (() -> Unit)? = null
 
     private val videoDecoder = VideoDecoder().apply {
         fallbackWidth = ServiceDiscoveryResponse.AA_WIDTH
@@ -131,6 +134,7 @@ class AaReceiver(
         consecutiveRefusals = 0
         consecutiveHandshakeFailures = 0
         selfModeFallbackTriggered = false
+        headunitVerified = false
         guidanceSurfaced = false
         AaLog.sink = log
         ConscryptInitializer.initialize()
@@ -149,15 +153,14 @@ class AaReceiver(
                 serverSocket = openReusableServerSocket(PORT)
                 log("[AA] WirelessServer listening on :$PORT (after retry)")
             } catch (e2: Exception) {
-                log("[AA] failed to bind :$PORT — ${e2.message}")
-                running = false
-                return
+                log("[AA] fallback port :$PORT unavailable — continuing with :5277 (${e2.message})")
             }
         }
 
-        registerNsd()
-
-        acceptThread = thread(name = "aa-accept", isDaemon = true) { acceptLoop() }
+        if (serverSocket != null) {
+            registerNsd()
+            acceptThread = thread(name = "aa-accept", isDaemon = true) { acceptLoop() }
+        }
         // Self-mode (launching Google Android Auto) is triggered via onNeedSelfModeFallback.
         // Those pokes never land on AA 17.4+, so the coordinator also dials OUT to :5277.
         dialThread = thread(name = "aa-coordinator", isDaemon = true) {
@@ -187,11 +190,13 @@ class AaReceiver(
 
     private fun clearBridgeSession() {
         AaVideoBridge.aaSessionLive = false
+        AaVideoBridge.headunitSessionLive = false
         AaVideoBridge.aaHandshaking = false
         AaVideoBridge.aaDecoding = false
         AaVideoBridge.reportFps(0)
         AaVideoBridge.touchSink = null
         AaVideoBridge.keySink = null
+        AaVideoBridge.voiceMicrophone = null
         AaVideoBridge.scrollSink = null
         AaVideoBridge.previewTouchSink = null
         AaVideoBridge.nightSink = null
@@ -255,6 +260,11 @@ class AaReceiver(
                 break
             }
             log("[AA] <<< Android Auto connected from ${client.inetAddress?.hostAddress}")
+            if (!headunitVerified || !allowSelfModeRecovery) {
+                log("[AA] waiting for the first :5277 handshake before accepting self-mode")
+                try { client.close() } catch (_: Exception) {}
+                continue
+            }
             if (!claimSession()) {
                 log("[AA] already have a session (or stopped) — dropping extra connection")
                 try { client.close() } catch (_: Exception) {}
@@ -266,15 +276,23 @@ class AaReceiver(
 
     private fun handleConnection(client: Socket, viaHeadunit: Boolean) {
         val conn = SocketAccessoryConnection(client)
-        val t = AapTransport(videoDecoder, context)
+        val t = try {
+            AapTransport(videoDecoder, context)
+        } catch (e: Exception) {
+            runCatching { conn.disconnect() }
+            synchronized(sessionLock) { sessionStarting = false }
+            if (viaHeadunit && running) AaVideoBridge.headunitStatus = HeadunitLinkStatus.HANDSHAKE_FAILED
+            log("[AA] TLS initialization failed: ${e.javaClass.simpleName}")
+            return
+        }
         val input = AaInput(t, log)
         t.onQuit = { clean ->
             val userExit = t.wasUserExit
             val local = t.localShutdown || !running
             val wasLive = t.handshakeComplete
             log("[AA] transport quit (clean=$clean, userExit=$userExit, local=$local, live=$wasLive)")
-            try { t.microphone?.stop("transport quit") } catch (_: Exception) {}
             input.shutdown()
+            t.microphone.stop()
             try { conn.disconnect() } catch (_: Exception) {}
             if (!local) {
                 // Peer-side drop (EOF / failed handshake): Gearhead lingers — long settle window.
@@ -333,6 +351,7 @@ class AaReceiver(
         // Phone/handlebar D-pad + rotary knob → Android Auto (drives a non-touch dash, and lets the
         // handlebar buttons navigate AA — see MediaButtonBridge). Cleared on transport quit / stop().
         AaVideoBridge.keySink = { keycode -> input.sendKey(keycode) }
+        AaVideoBridge.voiceMicrophone = t.microphone
         AaVideoBridge.scrollSink = { delta -> input.sendScroll(delta) }
 
         // In-app HUD preview (HudViewActivity) touches — already in AA source space, sent as-is.
@@ -344,9 +363,6 @@ class AaReceiver(
         t.nightMode = NightPrefs.isNightNow(context)
         AaVideoBridge.nightSink = { on -> t.sendNightMode(on) }
 
-        // Microphone: AA requests it (MICROPHONE_REQUEST) when the Assistant starts; AaMicrophone then
-        // streams the phone/helmet mic up the MIC channel so voice destination entry works hands-free.
-        t.microphone = AaMicrophone(context, t, log)
 
         log("[AA] starting AAP handshake (version + SSL)…")
         if (!t.startHandshake(conn)) {
@@ -367,14 +383,17 @@ class AaReceiver(
         consecutiveHandshakeFailures = 0
         consecutiveRefusals = 0
         guidanceSurfaced = false
-        if (viaHeadunit) AaVideoBridge.headunitStatus = HeadunitLinkStatus.CONNECTED
+        if (viaHeadunit) headunitVerified = true
         AaVideoBridge.aaHandshaking = false
         AaVideoBridge.aaSessionLive = true
+        AaVideoBridge.headunitSessionLive = viaHeadunit
+        if (viaHeadunit) AaVideoBridge.headunitStatus = HeadunitLinkStatus.CONNECTED
         AaVideoBridge.aaSessionSeen = true
         nightAutoThread = startNightAutoLoop(t)
         log("[AA] handshake OK — pointing decoder at encoder surface and starting read loop")
         videoDecoder.setSurface(encoderSurface)
         t.startReading()
+        if (viaHeadunit) onHeadunitConnected?.invoke()
         log("[AA] read loop started — expecting ServiceDiscovery then video")
     }
 
@@ -408,6 +427,7 @@ class AaReceiver(
                     consecutiveHandshakeFailures = consecutiveHandshakeFailures,
                     selfModeFallbackTriggered = selfModeFallbackTriggered,
                     guidanceSurfaced = guidanceSurfaced,
+                    allowSelfModeFallback = headunitVerified && allowSelfModeRecovery,
                 )
             )
             when (judgment.action) {
@@ -416,13 +436,13 @@ class AaReceiver(
                 AaConnectAction.WAIT_SETTLE_COOLDOWN -> Thread.sleep(judgment.delayMs.coerceIn(50L, 2_000L))
                 AaConnectAction.TRIGGER_SELF_MODE_AND_RETRY_5277 -> {
                     selfModeFallbackTriggered = true
-                    log("[AA] ${judgment.reasonTh}")
+                    log("[AA] ${androidx.core.content.ContextCompat.getContextForLanguage(context).getString(judgment.reasonRes)}")
                     try { onNeedSelfModeFallback?.invoke() } catch (_: Exception) {}
                 }
                 AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED -> {
                     guidanceSurfaced = true
-                    log("[AA] ${judgment.reasonTh}")
-                    try { onHeadunitGuidance?.invoke(judgment.reasonTh) } catch (_: Exception) {}
+                    log("[AA] ${androidx.core.content.ContextCompat.getContextForLanguage(context).getString(judgment.reasonRes)}")
+                    try { onHeadunitGuidance?.invoke(judgment.reasonRes) } catch (_: Exception) {}
                 }
                 AaConnectAction.DIAL_HEADUNIT_5277 -> {
                     lastDialAt = now
@@ -434,6 +454,14 @@ class AaReceiver(
 
     /** One real AAP attempt on :5277 (never a throwaway probe). Runs the handshake inline. */
     private fun dialHeadunitOnce() {
+        try {
+            SingleKeyKeyManager.fromResources(context)
+        } catch (e: Exception) {
+            if (running) AaVideoBridge.headunitStatus = HeadunitLinkStatus.HANDSHAKE_FAILED
+            log("[AA] Head Unit identity unavailable: ${e.javaClass.simpleName}")
+            return
+        }
+        if (!running) return
         val sock = try {
             connectLoopback(HEADUNIT_SERVER_PORT)
         } catch (e: Exception) {

@@ -255,7 +255,13 @@ object VideoPrefs {
     }
 
     /** Margins to advertise for the current AA [spec], or [AaMargins.NONE]. */
-    fun aaMarginsFor(ctx: Context, spec: AaVideoSpec, ssid: String? = null): AaMargins {
+    internal fun autoPanel(
+        measured: Pair<Int, Int>?, configured: Pair<Int, Int>?, previous: Pair<Int, Int>?,
+    ): Pair<Int, Int>? = measured ?: configured ?: previous
+
+    fun aaMarginsFor(
+        ctx: Context, spec: AaVideoSpec, ssid: String? = null, configuredPanel: Pair<Int, Int>? = null,
+    ): AaMargins {
         val mode = matchAspectMode(ctx)
         val panel = when (mode) {
             MatchAspectMode.OFF -> {
@@ -264,7 +270,7 @@ object VideoPrefs {
             }
             MatchAspectMode.MANUAL -> aspectTarget(ctx)
             MatchAspectMode.AUTO -> {
-                val detected = detectedPanelSize(ctx, ssid)
+                val detected = autoPanel(DashMemory.get(ctx, ssid), configuredPanel, detectedPanelSize(ctx, ssid))
                 if (detected == null) {
                     LogBus.log("[match-aspect] AUTO — no panel size yet (no DashMemory / profile.panelSize); margins 0 until learned")
                     return AaMargins.NONE

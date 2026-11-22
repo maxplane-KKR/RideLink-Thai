@@ -4,13 +4,18 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
+import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -25,15 +30,24 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
+import android.widget.RelativeLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
+import androidx.core.os.LocaleListCompat
+import androidx.core.view.doOnLayout
+import androidx.core.view.updateLayoutParams
 import androidx.lifecycle.lifecycleScope
 import dev.zanderp.opencfmoto.aa.AaInput
 import dev.zanderp.opencfmoto.aa.AaSelfMode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
 
 class MainActivity : AppCompatActivity() {
 
@@ -45,6 +59,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvSavedWifi: TextView
     private lateinit var tvPrivacyToggleBadge: TextView
     private lateinit var tvOnlineBadge: TextView
+    private lateinit var tvHeadunitHeaderStatus: TextView
     private lateinit var statusDot: View
     private lateinit var btnQuickStop: ImageButton
 
@@ -53,8 +68,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnStop: Button
     private lateinit var btnScanQr: Button
     private lateinit var btnManualWifi: Button
-    private lateinit var btnTogglePreview: Button
-    private lateinit var btnOpenStickCockpit: Button
 
     // Dashboard Live Viewport
     private lateinit var mainScrollView: FastScrollView
@@ -64,7 +77,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var svAaPreview: TextureView
     private lateinit var layoutAaPlaceholder: LinearLayout
     private lateinit var btnAaMaps: Button
-    private lateinit var btnAaMic: Button
     private lateinit var btnAaHome: Button
     private lateinit var btnAaBack: Button
 
@@ -90,7 +102,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var frameTrackpadSurface: FrameLayout
     private lateinit var viewTrackpadCursor: View
     private lateinit var btnFullAaMaps: Button
-    private lateinit var btnFullAaMic: Button
     private lateinit var btnFullAaHome: Button
     private lateinit var btnFullAaBack: Button
     private var btnFullAaStart: Button? = null
@@ -99,13 +110,20 @@ class MainActivity : AppCompatActivity() {
     private lateinit var paneDashboard: LinearLayout
     private lateinit var paneScreen: LinearLayout
     private lateinit var paneTft: LinearLayout
+    private lateinit var tftStudio: LiveDashboardStudio
     private lateinit var paneSettings: LinearLayout
 
     // Tab 3 & Tab 4 (TFT Info + Settings + Manual Calibration)
-    private lateinit var tvTftTitle: TextView
     private lateinit var tvTftStatus: TextView
-    private lateinit var tvAutoConnectState: TextView
-    private lateinit var btnToggleAutoConnect: Button
+    private lateinit var tvAppTagline: TextView
+    private lateinit var tvTftSyncStatus: TextView
+    private lateinit var tvTftSyncHint: TextView
+    private lateinit var btnTftSyncStop: Button
+    private lateinit var tftSyncActionBar: View
+    private lateinit var btnTftToggleStudio: Button
+    private lateinit var btnTftToggleDetails: Button
+    private lateinit var tftStudioContainer: FrameLayout
+    private lateinit var tftDetailsContainer: View
 
     private lateinit var rgManualResolution: RadioGroup
     private lateinit var rbResAuto: RadioButton
@@ -173,13 +191,31 @@ class MainActivity : AppCompatActivity() {
     private var activeTabIndex = 0
     private var isPreviewVisible = false
     private var suppressSettingsCallbacks = false
-    private var latestAutoWatcherReason = "สแตนด์บายรอ BT และหน้าเมนู QR บนจอรถ"
+    private var headunitSetupComplete = false
+    private var headunitSettingsVisited = false
+    private var initialPermissionsRequested = false
+    private var headunitUiResumed = false
+    private var voiceAfterPermission = false
+    private var initialHeadunitCheckRequested = false
+    private var headunitSetupDialog: AlertDialog? = null
 
     private val runtimePermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        BikeAutoWatcher.init(this)
         checkServerPort()
+    }
+
+    private val voicePermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) {
+            Toast.makeText(this, R.string.aa_voice_permission_denied, Toast.LENGTH_SHORT).show()
+        } else if (activeTabIndex == 1) {
+            if (headunitUiResumed) sendAaAssistant() else voiceAfterPermission = true
+        }
+    }
+
+    private val obdPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) chooseLiveObd()
+        else Toast.makeText(this, R.string.ridescreen_obd_permission, Toast.LENGTH_SHORT).show()
     }
 
     private val qrScannerLauncher = registerForActivityResult(
@@ -188,12 +224,19 @@ class MainActivity : AppCompatActivity() {
         if (result.resultCode == Activity.RESULT_OK) {
             refreshSavedBikeInfo()
             initSettingsState()
-            startAutoProjection("สแกนเมนู QR สำเร็จ — เริ่มเชื่อมต่อ Android Auto อัตโนมัติ")
+            startAutoProjection(getString(R.string.scan_auto_start))
         }
     }
 
+    private val tftFactoryBackup by lazy { TftFactoryBackup(noBackupFilesDir) }
+    private val tftFactoryDownloads by lazy { TftFactoryDownloads(applicationContext, tftFactoryBackup) }
+    private var preparingTftFactoryCopy = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        headunitSetupComplete = savedInstanceState?.getBoolean("headunit_setup_complete") == true
+        headunitSettingsVisited = savedInstanceState?.getBoolean("headunit_settings_visited") == true
+        initialPermissionsRequested = savedInstanceState?.getBoolean("initial_permissions_requested") == true
         ScreenMargins.load(this)
         TouchPrefs.init(this)
         setContentView(R.layout.activity_main)
@@ -207,9 +250,28 @@ class MainActivity : AppCompatActivity() {
         refreshSavedBikeInfo()
         initSettingsState()
         checkServerPort()
-        requestNeededPermissions()
-        BikeAutoWatcher.init(this)
-        handleDebugIntent(intent)
+        if (savedInstanceState == null) {
+            handleDebugIntent(intent)
+        } else {
+            setTftStudioOpen(savedInstanceState.getBoolean("tft_studio_open"))
+            setTftDetailsOpen(savedInstanceState.getBoolean("tft_details_open"))
+            selectTab(savedInstanceState.getInt("active_tab"))
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("headunit_setup_complete", headunitSetupComplete)
+        outState.putBoolean("headunit_settings_visited", headunitSettingsVisited)
+        outState.putBoolean("initial_permissions_requested", initialPermissionsRequested)
+        outState.putInt("active_tab", activeTabIndex)
+        outState.putBoolean("tft_studio_open", tftStudioContainer.visibility == View.VISIBLE)
+        outState.putBoolean("tft_details_open", tftDetailsContainer.visibility == View.VISIBLE)
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun changeAppLanguage() {
+        val next = if (resources.configuration.locales[0].language == "en") "th" else "en"
+        AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(next))
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -250,7 +312,6 @@ class MainActivity : AppCompatActivity() {
         intent ?: return
         val tab = intent.getIntExtra("debug_tab", -1)
         if (tab in 0..3) {
-            if (tab == 2) updateTftStatusText()
             if (tab == 3) refreshCalibrationUiReadouts()
             selectTab(tab)
         }
@@ -260,7 +321,6 @@ class MainActivity : AppCompatActivity() {
             if (isPreviewVisible != want) {
                 isPreviewVisible = want
                 layoutAaViewportContainer.visibility = if (isPreviewVisible) View.VISIBLE else View.GONE
-                btnTogglePreview.text = if (isPreviewVisible) "ซ่อนจอสด" else "แสดงจอสด"
                 syncVisiblePreviewSurface()
             }
         }
@@ -270,28 +330,52 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        SessionService.onActivityStarted()
+        LiveObd.setAppVisible(this, true)
+    }
+
+    override fun onStop() {
+        LiveObd.setAppVisible(this, false)
+        SessionService.onActivityStopped()
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         AaSelfMode.foregroundActivityProvider = {
             if (!isFinishing && !isDestroyed) this else null
         }
-        BikeAutoWatcher.onAppForegroundChanged(this, true)
+        headunitUiResumed = true
+        if (voiceAfterPermission) {
+            voiceAfterPermission = false
+            sendAaAssistant()
+        }
+        val restartStandby = SessionService.consumeStandbyRestart()
+        if (!initialHeadunitCheckRequested || restartStandby) {
+            initialHeadunitCheckRequested = true
+            requestHeadunitCheck()
+        }
+        if (headunitSetupComplete) activateProjectionControls()
         checkServerPort()
         syncVisiblePreviewSurface()
         updateFpsAndPlaceholderUi(AaVideoBridge.currentFps)
     }
 
     override fun onPause() {
+        headunitUiResumed = false
+        AaVideoBridge.voiceMicrophone?.stop()
         if (AaSelfMode.foregroundActivityProvider?.invoke() === this) {
             AaSelfMode.foregroundActivityProvider = null
         }
-        BikeAutoWatcher.onAppForegroundChanged(this, false)
         super.onPause()
     }
 
     override fun onDestroy() {
+        headunitSetupDialog?.dismiss()
+        AaVideoBridge.headunitStatusListener = null
         AaVideoBridge.fpsListener = null
-        BikeAutoWatcher.statusListener = null
         dashPreviewSurface?.let {
             AaVideoBridge.unbindPreview(it)
             it.release()
@@ -309,12 +393,7 @@ class MainActivity : AppCompatActivity() {
         val perms = mutableListOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.RECORD_AUDIO,
         )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
-            perms.add(Manifest.permission.BLUETOOTH_SCAN)
-        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             perms.add(Manifest.permission.NEARBY_WIFI_DEVICES)
             perms.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -327,17 +406,66 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Starts or restarts [SessionService]. Note: [SessionService] binds `:5288` synchronously
-     * FIRST and then triggers [AaSelfMode] once using [AaSelfMode.foregroundActivityProvider],
-     * eliminating the premature double-trigger race from previous versions.
-     */
+    private fun activateProjectionControls() {
+        if (!initialPermissionsRequested) {
+            initialPermissionsRequested = true
+            requestNeededPermissions()
+        }
+    }
+
+    private fun requestHeadunitCheck() {
+        if (SessionService.isRunning) return
+        val intent = Intent(this, SessionService::class.java).setAction(SessionService.ACTION_PREPARE_HEADUNIT)
+        ContextCompat.startForegroundService(this, intent)
+    }
+
+    private fun showRequiredHeadunitSetup() {
+        if (headunitSetupDialog?.isShowing == true || isFinishing || isDestroyed) return
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.headunit_setup_required_title)
+            .setMessage(R.string.headunit_setup_required_message)
+            .setCancelable(false)
+            .setPositiveButton(R.string.headunit_open_settings, null)
+            .setNegativeButton(R.string.headunit_setup_continue, null)
+            .create()
+        headunitSetupDialog = dialog
+        dialog.setOnDismissListener {
+            if (headunitSetupDialog === dialog) headunitSetupDialog = null
+        }
+        dialog.setOnShowListener {
+            val continueButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
+            continueButton.isEnabled = headunitSettingsVisited
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (openAndroidAutoSettings()) {
+                    headunitSettingsVisited = true
+                    continueButton.isEnabled = true
+                } else {
+                    Toast.makeText(this, R.string.headunit_settings_unavailable, Toast.LENGTH_LONG).show()
+                }
+            }
+            continueButton.setOnClickListener {
+                if (!headunitSettingsVisited) return@setOnClickListener
+                headunitSetupComplete = true
+                dialog.dismiss()
+                activateProjectionControls()
+                checkServerPort()
+            }
+        }
+        dialog.show()
+    }
+
+    /** Starts [SessionService], which verifies the head unit before joining the bike network. */
     private fun startAutoProjection(toastMsg: String) {
-        BikeAutoWatcher.onManualStartOrSessionActive()
+        val requestedAt = SystemClock.elapsedRealtime()
+        if (!headunitSetupComplete) {
+            checkServerPort()
+            if (!headunitSetupComplete) return
+        }
         updateTftStatusText()
 
         val intent = Intent(this, SessionService::class.java).apply {
             action = SessionService.ACTION_START
+            putExtra(SessionService.EXTRA_CONNECT_REQUESTED_AT, requestedAt)
         }
         ContextCompat.startForegroundService(this, intent)
         Toast.makeText(this, toastMsg, Toast.LENGTH_SHORT).show()
@@ -352,6 +480,9 @@ class MainActivity : AppCompatActivity() {
         tvSavedWifi = findViewById(R.id.tvSavedWifi)
         tvPrivacyToggleBadge = findViewById(R.id.tvPrivacyToggleBadge)
         tvOnlineBadge = findViewById(R.id.tvOnlineBadge)
+        tvHeadunitHeaderStatus = findViewById<TextView>(R.id.tvHeadunitHeaderStatus).apply {
+            setOnClickListener { checkServerPort(fromUserClick = true) }
+        }
         statusDot = findViewById(R.id.statusDot)
         btnQuickStop = findViewById(R.id.btnQuickStop)
 
@@ -359,8 +490,6 @@ class MainActivity : AppCompatActivity() {
         btnStop = findViewById(R.id.btnStop)
         btnScanQr = findViewById(R.id.btnScanQr)
         btnManualWifi = findViewById(R.id.btnManualWifi)
-        btnTogglePreview = findViewById(R.id.btnTogglePreview)
-        btnOpenStickCockpit = findViewById(R.id.btnOpenStickCockpit)
 
         mainScrollView = findViewById(R.id.mainScrollView)
         layoutAaViewportContainer = findViewById(R.id.layoutAaViewportContainer)
@@ -369,7 +498,6 @@ class MainActivity : AppCompatActivity() {
         svAaPreview = findViewById(R.id.svAaPreview)
         layoutAaPlaceholder = findViewById(R.id.layoutAaPlaceholder)
         btnAaMaps = findViewById(R.id.btnAaMaps)
-        btnAaMic = findViewById(R.id.btnAaMic)
         btnAaHome = findViewById(R.id.btnAaHome)
         btnAaBack = findViewById(R.id.btnAaBack)
 
@@ -392,7 +520,6 @@ class MainActivity : AppCompatActivity() {
         frameTrackpadSurface = findViewById(R.id.frameTrackpadSurface)
         viewTrackpadCursor = findViewById(R.id.viewTrackpadCursor)
         btnFullAaMaps = findViewById(R.id.btnFullAaMaps)
-        btnFullAaMic = findViewById(R.id.btnFullAaMic)
         btnFullAaHome = findViewById(R.id.btnFullAaHome)
         btnFullAaBack = findViewById(R.id.btnFullAaBack)
         btnFullAaStart = findViewById(R.id.btnFullAaStart)
@@ -401,12 +528,19 @@ class MainActivity : AppCompatActivity() {
         paneScreen = findViewById(R.id.paneScreen)
         paneTft = findViewById(R.id.paneTft)
         paneSettings = findViewById(R.id.paneSettings)
+        findViewById<Button>(R.id.btnAppLanguage).setOnClickListener { changeAppLanguage() }
 
         // Tab 3 & Tab 4 Views
-        tvTftTitle = findViewById(R.id.tvTftTitle)
         tvTftStatus = findViewById(R.id.tvTftStatus)
-        tvAutoConnectState = findViewById(R.id.tvAutoConnectState)
-        btnToggleAutoConnect = findViewById(R.id.btnToggleAutoConnect)
+        tvAppTagline = findViewById(R.id.tvAppTagline)
+        tvTftSyncStatus = findViewById(R.id.tvTftSyncStatus)
+        tvTftSyncHint = findViewById(R.id.tvTftSyncHint)
+        btnTftSyncStop = findViewById(R.id.btnTftSyncStop)
+        tftSyncActionBar = findViewById(R.id.tftSyncActionBar)
+        btnTftToggleStudio = findViewById(R.id.btnTftToggleStudio)
+        btnTftToggleDetails = findViewById(R.id.btnTftToggleDetails)
+        tftStudioContainer = findViewById(R.id.tftStudioContainer)
+        tftDetailsContainer = findViewById(R.id.tftDetailsContainer)
 
         rgManualResolution = findViewById(R.id.rgManualResolution)
         rbResAuto = findViewById(R.id.rbResAuto)
@@ -472,27 +606,36 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
-        btnStart.setOnClickListener {
-            it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            startAutoProjection("กำลังเริ่มการเชื่อมต่อ Android Auto...")
+        btnStart.setOnClickListener(::startProjection)
+        btnFullAaStart?.setOnClickListener(::startProjection)
+        btnStop.setOnClickListener(::stopProjection)
+        btnQuickStop.setOnClickListener(::stopProjection)
+        btnTftSyncStop.setOnClickListener { button ->
+            button.isEnabled = false
+            stopProjection(button)
         }
-        btnFullAaStart?.setOnClickListener {
-            it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            startAutoProjection("กำลังเริ่มการเชื่อมต่อ Android Auto...")
+        btnTftToggleStudio.setOnClickListener {
+            setTftStudioOpen(false)
+        }
+        findViewById<Button>(R.id.btnTftChangeDashboard).setOnClickListener { button ->
+            button.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            setTftStudioOpen(true)
+            btnTftToggleStudio.doOnLayout { anchor ->
+                val bounds = Rect()
+                anchor.getDrawingRect(bounds)
+                mainScrollView.offsetDescendantRectToMyCoords(anchor, bounds)
+                mainScrollView.smoothScrollTo(0, bounds.top)
+            }
         }
 
-        val stopAction = View.OnClickListener { v ->
-            v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            BikeAutoWatcher.onManualStop(this)
-            val intent = Intent(this, SessionService::class.java).apply {
-                action = SessionService.ACTION_STOP
-            }
-            startService(intent)
-            updateFpsAndPlaceholderUi(0)
-            Toast.makeText(this, "หยุดการเชื่อมต่อแล้ว (พร้อมต่อใหม่ได้ทันที)", Toast.LENGTH_SHORT).show()
+        btnTftToggleDetails.setOnClickListener {
+            setTftDetailsOpen(tftDetailsContainer.visibility != View.VISIBLE)
         }
-        btnStop.setOnClickListener(stopAction)
-        btnQuickStop.setOnClickListener(stopAction)
+        findViewById<Button>(R.id.btnTftDiagnosticLog).setOnClickListener { showConnectionIssueReport() }
+        findViewById<Button>(R.id.btnConnectionIssueReport).setOnClickListener { button ->
+            button.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            showConnectionIssueReport()
+        }
 
         // Tap-to-Reveal / Hide Privacy Mask on Saved Bike Card (or open Wi-Fi settings when waiting/reconnecting)
         layoutSavedBikeBar.setOnClickListener {
@@ -515,30 +658,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        btnScanQr.setOnClickListener {
-            val intent = Intent(this, QrScanActivity::class.java)
-            qrScannerLauncher.launch(intent)
-        }
+        btnScanQr.setOnClickListener { launchBikeScanner() }
 
         btnManualWifi.setOnClickListener {
             showManualWifiDialog()
-        }
-
-        btnTogglePreview.setOnClickListener {
-            isPreviewVisible = !isPreviewVisible
-            layoutAaViewportContainer.visibility = if (isPreviewVisible) View.VISIBLE else View.GONE
-            btnTogglePreview.text = if (isPreviewVisible) "ซ่อนจอสด" else "แสดงจอสด"
-            if (isPreviewVisible) {
-                syncVisiblePreviewSurface()
-            } else if (activeTabIndex == 0) {
-                AaVideoBridge.unbindPreview(dashPreviewSurface)
-                mainScrollView.scrollTo(0, 0)
-            }
-        }
-
-        btnOpenStickCockpit.setOnClickListener {
-            it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            selectTab(1)
         }
 
         btnCheckServer.setOnClickListener {
@@ -555,13 +678,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Quick AA Buttons (wired identically on both Tab 0 & Tab 1)
-        val sendMaps = View.OnClickListener {
+        val openMaps = View.OnClickListener {
             it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            sendAaNavigation()
-        }
-        val sendMic = View.OnClickListener {
-            it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            sendAaAssistant()
+            openPhoneMaps()
         }
         val sendHome = View.OnClickListener {
             it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -572,23 +691,22 @@ class MainActivity : AppCompatActivity() {
             sendAaBack()
         }
 
-        btnAaMaps.setOnClickListener(sendMaps)
-        btnAaMic.setOnClickListener(sendMic)
+        btnAaMaps.setOnClickListener(openMaps)
         btnAaHome.setOnClickListener(sendHome)
         btnAaBack.setOnClickListener(sendBack)
 
-        btnFullAaMaps.setOnClickListener(sendMaps)
-        btnFullAaMic.setOnClickListener(sendMic)
+        btnFullAaMaps.setOnClickListener(openMaps)
+        findViewById<Button>(R.id.btnFullAaMic).setOnClickListener {
+            it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            requestAaVoiceCommand()
+        }
         btnFullAaHome.setOnClickListener(sendHome)
         btnFullAaBack.setOnClickListener(sendBack)
 
         // Dock Navigation
         tabDashboard.setOnClickListener { selectTab(0) }
         tabScreen.setOnClickListener { selectTab(1) }
-        tabTft.setOnClickListener {
-            updateTftStatusText()
-            selectTab(2)
-        }
+        tabTft.setOnClickListener { selectTab(2) }
         tabSettings.setOnClickListener {
             refreshCalibrationUiReadouts()
             selectTab(3)
@@ -597,17 +715,30 @@ class MainActivity : AppCompatActivity() {
         setupSettingsListeners()
     }
 
-    private fun setupSettingsListeners() {
-        // 0. Auto-Connect Toggle
-        btnToggleAutoConnect.setOnClickListener {
-            it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            val next = !AutoConnectPrefs.isAutoConnectEnabled(this)
-            AutoConnectPrefs.setAutoConnectEnabled(this, next)
-            BikeAutoWatcher.refreshConfig(this)
-            refreshAutoConnectButtonUi()
-            refreshSavedBikeInfo()
-        }
+    private fun startProjection(view: View) {
+        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        startAutoProjection(getString(R.string.conn_starting_aa))
+    }
 
+    private fun stopProjection(view: View) {
+        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        requestProjectionStop()
+        Toast.makeText(this, getString(R.string.disconnected_ready), Toast.LENGTH_SHORT).show()
+    }
+
+    private fun requestProjectionStop() {
+        val intent = Intent(this, SessionService::class.java).apply {
+            action = SessionService.ACTION_STOP_PROJECTION
+        }
+        startService(intent)
+        updateFpsAndPlaceholderUi(0)
+    }
+
+    private fun launchBikeScanner() {
+        qrScannerLauncher.launch(Intent(this, QrScanActivity::class.java))
+    }
+
+    private fun setupSettingsListeners() {
         // 1. Manual AA Resolution Override
         rgManualResolution.setOnCheckedChangeListener { _, checkedId ->
             if (suppressSettingsCallbacks) return@setOnCheckedChangeListener
@@ -620,7 +751,7 @@ class MainActivity : AppCompatActivity() {
             BikeProfileHolder.aaVideoOverride = VideoPrefs.resolutionOverride(this, BikeProfileHolder.active)
             refreshCalibrationUiReadouts()
             updateTftStatusText()
-            Toast.makeText(this, "บันทึกความละเอียดแล้ว (จะมีผลเมื่อเริ่มเชื่อมต่อรอบถัดไป)", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.resolution_saved), Toast.LENGTH_SHORT).show()
         }
 
         // 2. Manual DPI Icon/Navbar Zoom (100 - 220 DPI, step 5)
@@ -631,7 +762,7 @@ class MainActivity : AppCompatActivity() {
             VideoPrefs.setDpiOverride(this, null)
             refreshCalibrationUiReadouts()
             updateTftStatusText()
-            Toast.makeText(this, "รีเซ็ตขนาดไอคอนเป็นค่าแนะนำตามรุ่นรถแล้ว", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.dpi_reset_done), Toast.LENGTH_SHORT).show()
         }
 
         // 3. Live Overall Viewport Scale (70% - 100%, step 2%)
@@ -663,15 +794,15 @@ class MainActivity : AppCompatActivity() {
 
         btnPresetZontesSafe.setOnClickListener {
             it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            applySafeAreaPreset(ProjectionHarness.SafeAreaPreset.ZONTES_TEMPLATE_SAFE, "ใช้ค่าหลบกรอบ Template หน้าจอ Zontes แล้ว")
+            applySafeAreaPreset(ProjectionHarness.SafeAreaPreset.ZONTES_TEMPLATE_SAFE, getString(R.string.preset_zontes_done))
         }
         btnPresetDeepSafe.setOnClickListener {
             it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            applySafeAreaPreset(ProjectionHarness.SafeAreaPreset.ZONTES_DEEP_FRAME, "ใช้ค่าหลบกรอบลึกพิเศษแล้ว")
+            applySafeAreaPreset(ProjectionHarness.SafeAreaPreset.ZONTES_DEEP_FRAME, getString(R.string.preset_deep_done))
         }
         btnPresetFullReset.setOnClickListener {
             it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            applySafeAreaPreset(ProjectionHarness.SafeAreaPreset.FULL_PANEL, "รีเซ็ตขนาดเต็มจอ 100% แล้ว")
+            applySafeAreaPreset(ProjectionHarness.SafeAreaPreset.FULL_PANEL, getString(R.string.preset_full_done))
         }
 
         // Touch Y Offset Tuning
@@ -1044,16 +1175,16 @@ class MainActivity : AppCompatActivity() {
         btnRotaryPrev.setOnClickListener {
             it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
             val scroll = AaVideoBridge.scrollSink
-            if (scroll != null) scroll.invoke(-1) else sendAaKeyOrToast(AaInput.KEY_LEFT, "โฟกัสก่อนหน้า")
+            if (scroll != null) scroll.invoke(-1) else sendAaKeyOrToast(AaInput.KEY_LEFT, getString(R.string.focus_previous_action))
         }
         btnStickConfirm.setOnClickListener {
             it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            sendAaKeyOrToast(AaInput.KEY_ENTER, "ตกลง (OK)")
+            sendAaKeyOrToast(AaInput.KEY_ENTER, getString(R.string.focus_ok_action))
         }
         btnRotaryNext.setOnClickListener {
             it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
             val scroll = AaVideoBridge.scrollSink
-            if (scroll != null) scroll.invoke(1) else sendAaKeyOrToast(AaInput.KEY_RIGHT, "โฟกัสถัดไป")
+            if (scroll != null) scroll.invoke(1) else sendAaKeyOrToast(AaInput.KEY_RIGHT, getString(R.string.focus_next_action))
         }
 
         // Precision Touchpad Surface (maps full pad area into AA coded canvas + visual cursor dot)
@@ -1105,31 +1236,53 @@ class MainActivity : AppCompatActivity() {
         }, 60L)
     }
 
-    private fun sendAaNavigation() {
-        val spec = BikeProfileHolder.aaVideo
-        val keySink = AaVideoBridge.keySink
-        keySink?.invoke(AaInput.KEY_GUIDE)
-        keySink?.invoke(AaInput.KEY_EXPLORER)
+    private fun openPhoneMaps() {
+        val maps = Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_MAPS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(maps)
+        } catch (_: ActivityNotFoundException) {
+            val googleMaps = packageManager.getLaunchIntentForPackage("com.google.android.apps.maps")
+            try {
+                if (googleMaps != null) {
+                    startActivity(googleMaps)
+                    return
+                }
+            } catch (_: ActivityNotFoundException) {
+                // The app may have been disabled or removed since the lookup.
+            }
+            Toast.makeText(this, R.string.phone_maps_unavailable, Toast.LENGTH_SHORT).show()
+        }
+    }
 
-        // Touch injection on Coolwalk Maps icon (~100px from left, ~28px from bottom)
-        val mapX = (spec.width * 0.13f).toInt().coerceIn(80, 140)
-        val mapY = spec.height - 28
-        injectAaTouchTap(mapX, mapY)
-        LogBus.log("[AA-UI] sendAaNavigation: injected touch at ($mapX, $mapY)")
+    private fun requestAaVoiceCommand() {
+        if (!AaVideoBridge.aaSessionLive) {
+            showAaVoiceDisconnected()
+        } else if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            sendAaAssistant()
+        } else {
+            voicePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
 
     private fun sendAaAssistant() {
-        val spec = BikeProfileHolder.aaVideo
+        if (!headunitUiResumed || activeTabIndex != 1) return
+        val microphone = AaVideoBridge.voiceMicrophone
         val keySink = AaVideoBridge.keySink
-        keySink?.invoke(AaInput.KEY_ASSISTANT)
-        keySink?.invoke(AaInput.KEY_VOICE_ASSIST)
+        if (!AaVideoBridge.aaSessionLive || microphone == null || keySink == null) {
+            showAaVoiceDisconnected()
+            return
+        }
+        microphone.arm()
+        keySink(AaInput.KEY_ASSISTANT)
+        keySink(AaInput.KEY_VOICE_ASSIST)
         AaVideoBridge.noteAaAudioActive()
+        val spec = BikeProfileHolder.aaVideo
+        injectAaTouchTap(spec.width - 36, spec.height - 28)
+    }
 
-        // Touch injection on Coolwalk Assistant / Mic icon (bottom right: ~36px from right edge)
-        val micX = spec.width - 36
-        val micY = spec.height - 28
-        injectAaTouchTap(micX, micY)
-        LogBus.log("[AA-UI] sendAaAssistant: sent KEY_ASSISTANT and injected touch at ($micX, $micY)")
+    private fun showAaVoiceDisconnected() {
+        Toast.makeText(this, getString(R.string.aa_disconnected_action, getString(R.string.aa_voice)), Toast.LENGTH_SHORT).show()
     }
 
     private fun sendAaHome() {
@@ -1150,7 +1303,7 @@ class MainActivity : AppCompatActivity() {
         if (sink != null) {
             sink.invoke(AaInput.KEY_BACK)
         } else {
-            Toast.makeText(this, "ยังไม่ได้เชื่อมต่อ AA (ย้อนกลับ)", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.aa_disconnected_back), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1159,11 +1312,29 @@ class MainActivity : AppCompatActivity() {
         if (sink != null) {
             sink.invoke(keycode)
         } else {
-            Toast.makeText(this, "ยังไม่ได้เชื่อมต่อ AA ($label)", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.aa_disconnected_action, label), Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun setupTelemetryListeners() {
+        lifecycleScope.launch {
+            RideScreenLiveDashboard.activeState.collect { active ->
+                if (::tftStudio.isInitialized) tftStudio.setLiveActive(active)
+            }
+        }
+        lifecycleScope.launch {
+            LiveObd.status.collect { status ->
+                if (::tftStudio.isInitialized) tftStudio.setObdStatus(status)
+            }
+        }
+        lifecycleScope.launch {
+            LiveObd.inventory.collect { inventory ->
+                if (::tftStudio.isInitialized) tftStudio.setObdInventory(inventory)
+            }
+        }
+        AaVideoBridge.headunitStatusListener = {
+            runOnUiThread { if (!isFinishing && !isDestroyed) checkServerPort() }
+        }
         ConnectionState.listener = { phase, detail ->
             runOnUiThread {
                 updateConnectionUI(phase, detail)
@@ -1174,13 +1345,6 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 updateFpsAndPlaceholderUi(fps)
                 checkServerPort()
-            }
-        }
-        BikeAutoWatcher.statusListener = { _, reasonTh ->
-            runOnUiThread {
-                latestAutoWatcherReason = reasonTh
-                tvAutoConnectState.text = "สถานะ: $reasonTh"
-                refreshSavedBikeInfo()
             }
         }
         updateConnectionUI(ConnectionState.phase, ConnectionState.detail)
@@ -1200,7 +1364,7 @@ class MainActivity : AppCompatActivity() {
             layoutAaPlaceholder.visibility = View.GONE
             layoutFullAaPlaceholder.visibility = View.GONE
         } else {
-            val idleText = if (SessionService.isRunning) "● กำลังรอภาพ AA..." else "● รอสัญญาณภาพ"
+            val idleText = if (SessionService.isRunning) getString(R.string.waiting_aa_video) else getString(R.string.waiting_video)
             val col = ContextCompat.getColor(
                 this,
                 if (SessionService.isRunning) R.color.amber_accent else R.color.text_secondary
@@ -1214,35 +1378,48 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateConnectionUI(phase: Phase, detail: String) {
+    private fun updateConnectionUI(phase: Phase, detail: ConnectionState.Detail) {
         val label = getString(phase.labelRes)
         tvStatusTitle.text = label
         val savedSsid = BikeMemory.selected(this)?.qr?.ssid
         val masked = AutoConnectPrefs.isPrivacyMasked(this)
-        val cleanDetail = ProjectionHarness.sanitizeStatusText(detail, savedSsid, masked)
+        val cleanDetail = ProjectionHarness.sanitizeStatusText(detail.resolve(this), savedSsid, masked)
         tvStatusDesc.text = if (cleanDetail.isNotBlank()) {
             cleanDetail
         } else {
-            "กดเมนู QR บนจอรถเพื่อเชื่อมอัตโนมัติ หรือกดเริ่มเชื่อมต่อด้านล่าง"
+            getString(R.string.connect_instructions)
         }
 
         if (phase == Phase.STREAMING || phase == Phase.AA_VIDEO_LIVE) {
             statusDot.setBackgroundResource(R.drawable.btn_liquid_emerald)
-            tvOnlineBadge.text = "● สตรีมสด"
+            tvOnlineBadge.text = getString(R.string.badge_live)
             tvOnlineBadge.setTextColor(ContextCompat.getColor(this, R.color.green_neon))
         } else if (phase.busy) {
             statusDot.setBackgroundResource(R.drawable.btn_liquid_sapphire)
-            tvOnlineBadge.text = "● กำลังเชื่อมต่อ"
+            tvOnlineBadge.text = getString(R.string.badge_connecting)
             tvOnlineBadge.setTextColor(ContextCompat.getColor(this, R.color.cyan_neon))
         } else if (phase == Phase.ERROR) {
             statusDot.setBackgroundResource(R.drawable.btn_liquid_ruby)
-            tvOnlineBadge.text = "● พบปัญหา"
+            tvOnlineBadge.text = getString(R.string.badge_error)
             tvOnlineBadge.setTextColor(ContextCompat.getColor(this, R.color.ruby_bright))
         } else {
             statusDot.setBackgroundResource(R.drawable.dock_capsule_bg)
-            tvOnlineBadge.text = "● สแตนด์บาย"
+            tvOnlineBadge.text = getString(R.string.badge_standby)
             tvOnlineBadge.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
         }
+        updateTftSyncUi(phase, hasSavedBikeWifi = !savedSsid.isNullOrBlank(), detail = cleanDetail)
+        if (tftDetailsContainer.visibility == View.VISIBLE) updateTftStatusText()
+    }
+
+    private fun updateTftSyncUi(phase: Phase, hasSavedBikeWifi: Boolean, detail: String) {
+        val judgment = ProjectionHarness.evaluateTftSyncUi(phase, SessionService.isProjectionRequested, hasSavedBikeWifi)
+        tvTftSyncStatus.setText(judgment.statusRes)
+        tvTftSyncHint.text = detail.takeIf {
+            it.isNotBlank() && (judgment.statusRes == R.string.conn_error || phase == Phase.RECONNECTING && judgment.canStop)
+        } ?: getString(judgment.hintRes)
+
+        btnTftSyncStop.visibility = if (judgment.canStop) View.VISIBLE else View.GONE
+        btnTftSyncStop.isEnabled = judgment.canStop
     }
 
     private fun refreshSavedBikeInfo() {
@@ -1252,19 +1429,19 @@ class MainActivity : AppCompatActivity() {
             val qr = bike.qr
             tvSavedBike.text = ProjectionHarness.maskIdentifier(bike.name, masked)
             if (masked) {
-                tvSavedWifi.text = latestAutoWatcherReason
-                tvPrivacyToggleBadge.text = "กดเพื่อแสดง"
+                tvSavedWifi.text = getString(R.string.saved_wifi_masked, ProjectionHarness.maskIdentifier(qr?.ssid, masked = true))
+                tvPrivacyToggleBadge.text = getString(R.string.reveal_details)
                 tvPrivacyToggleBadge.setTextColor(ContextCompat.getColor(this, R.color.cyan_neon))
             } else {
-                val ssidFull = qr?.ssid ?: "ไม่ระบุ"
+                val ssidFull = qr?.ssid ?: getString(R.string.unspecified)
                 tvSavedWifi.text = "Wi-Fi SSID: $ssidFull"
-                tvPrivacyToggleBadge.text = "ซ่อนข้อมูล"
+                tvPrivacyToggleBadge.text = getString(R.string.hide_details)
                 tvPrivacyToggleBadge.setTextColor(ContextCompat.getColor(this, R.color.amber_accent))
             }
         } else {
-            tvSavedBike.text = "ยังไม่มีรถที่จำไว้"
-            tvSavedWifi.text = "กดปุ่ม 'สแกน QR รถ' หรือ 'ใส่ Wi-Fi เอง' เพื่อบันทึกครั้งแรก"
-            tvPrivacyToggleBadge.text = "สแกน QR"
+            tvSavedBike.text = getString(R.string.no_saved_bike)
+            tvSavedWifi.text = getString(R.string.save_bike_hint)
+            tvPrivacyToggleBadge.text = getString(R.string.scan_qr)
             tvPrivacyToggleBadge.setTextColor(ContextCompat.getColor(this, R.color.cyan_neon))
         }
     }
@@ -1278,6 +1455,20 @@ class MainActivity : AppCompatActivity() {
      */
     private fun checkServerPort(fromUserClick: Boolean = false) {
         val running = SessionService.isRunning
+        val headunitLive = AaVideoBridge.headunitSessionLive
+        val detail = ConnectionState.detail
+        val needsSetup = ConnectionState.phase == Phase.ERROR ||
+            detail.isResource(R.string.headunit_refused) || detail.isResource(R.string.headunit_wedged)
+        if (!headunitSetupComplete && headunitUiResumed) {
+            when {
+                headunitLive -> {
+                    headunitSetupComplete = true
+                    headunitSetupDialog?.dismiss()
+                    activateProjectionControls()
+                }
+                needsSetup -> showRequiredHeadunitSetup()
+            }
+        }
         val judgment = ProjectionHarness.evaluateServerStatusUi(
             sessionRunning = running,
             handshakeLive = AaVideoBridge.aaSessionLive,
@@ -1285,43 +1476,54 @@ class MainActivity : AppCompatActivity() {
             fps = AaVideoBridge.currentFps,
             headunit = AaVideoBridge.headunitStatus,
         )
-        tvServerStatus.text = judgment.text
-        val color = when (judgment.level) {
-            ProjectionHarness.UiLevel.OK -> R.color.green_neon
-            ProjectionHarness.UiLevel.BUSY -> R.color.cyan_neon
-            ProjectionHarness.UiLevel.WARN -> R.color.amber_accent
-            ProjectionHarness.UiLevel.ERROR -> R.color.ruby_bright
-            ProjectionHarness.UiLevel.NEUTRAL -> R.color.text_secondary
+        val header = ProjectionHarness.evaluateHeadunitHeader(
+            setupComplete = headunitSetupComplete,
+            sessionRunning = running,
+            headunitLive = headunitLive,
+            androidAutoLive = AaVideoBridge.aaSessionLive,
+            headunit = if (headunitSetupComplete || needsSetup) AaVideoBridge.headunitStatus
+                else ProjectionHarness.HeadunitLinkStatus.UNKNOWN,
+            projectionRequested = SessionService.isProjectionRequested,
+        )
+        val status = if (SessionService.isProjectionRequested) judgment else header
+        val serverText = getString(status.textRes)
+        tvServerStatus.text = serverText
+        tvServerStatus.setTextColor(serverStatusColor(status.level))
+        tvHeadunitHeaderStatus.setText(header.textRes)
+        tvHeadunitHeaderStatus.setTextColor(serverStatusColor(header.level))
+        if (!fromUserClick || !headunitSetupComplete || headunitLive) return
+        val guidance = when (AaVideoBridge.headunitStatus) {
+            ProjectionHarness.HeadunitLinkStatus.REFUSED -> R.string.headunit_refused
+            ProjectionHarness.HeadunitLinkStatus.HANDSHAKE_FAILED -> R.string.headunit_wedged
+            else -> R.string.headunit_dialog_message
         }
-        tvServerStatus.setTextColor(ContextCompat.getColor(this, color))
-        if (!fromUserClick) return
-
-        if (running) {
-            Toast.makeText(this, judgment.text.removePrefix("● "), Toast.LENGTH_SHORT).show()
-            return
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.headunit_dialog_title))
+            .setMessage(guidance)
+            .setPositiveButton(R.string.headunit_open_settings) { _, _ -> openAndroidAutoSettings() }
+            .setNegativeButton(R.string.close, null)
+        if (!running) {
+            dialog.setNeutralButton(R.string.check_status) { _, _ -> requestHeadunitCheck() }
         }
-        AlertDialog.Builder(this)
-            .setTitle("เซิร์ฟเวอร์เฮดยูนิต (:5277)")
-            .setMessage(
-                "RideLink จะไม่ \"เคาะ\" พอร์ต :5277 เพื่อตรวจสถานะ เพราะ Android Auto 17.9 จะล่มทันที " +
-                    "(Already connected) แล้วต้องเปิดเซิร์ฟเวอร์ใหม่\n\n" +
-                    "ระบบจะตรวจด้วยการเชื่อมต่อจริงเพียงครั้งเดียวเมื่อกด 'เริ่มเชื่อมต่อ' และจะลองต่อใหม่ให้อัตโนมัติ\n\n" +
-                    "หากยังไม่ได้เปิด: Android Auto → แตะ Version 10 ครั้ง → ⋮ → Start head unit server"
-            )
-            .setPositiveButton("เริ่มเชื่อมต่อ") { _, _ ->
-                startAutoProjection("กำลังเริ่มการเชื่อมต่อ Android Auto...")
-            }
-            .setNeutralButton("เปิดตั้งค่า Android Auto") { _, _ -> openAndroidAutoSettings() }
-            .setNegativeButton("ปิด", null)
-            .show()
+        dialog.show()
     }
 
-    private fun openAndroidAutoSettings() {
+    private fun serverStatusColor(level: ProjectionHarness.UiLevel): Int = ContextCompat.getColor(this, when (level) {
+        ProjectionHarness.UiLevel.OK -> R.color.green_neon
+        ProjectionHarness.UiLevel.BUSY -> R.color.cyan_neon
+        ProjectionHarness.UiLevel.WARN -> R.color.amber_accent
+        ProjectionHarness.UiLevel.ERROR -> R.color.ruby_bright
+        ProjectionHarness.UiLevel.NEUTRAL -> R.color.text_secondary
+    })
+
+    private fun openAndroidAutoSettings(): Boolean {
         try {
             val intent = Intent("com.google.android.projection.gearhead.SETTINGS").apply {
+                setPackage("com.google.android.projection.gearhead")
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             startActivity(intent)
+            return true
         } catch (_: Exception) {
             try {
                 val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
@@ -1336,6 +1538,7 @@ class MainActivity : AppCompatActivity() {
                 startActivity(intent)
             }
         }
+        return false
     }
 
     private fun showManualWifiDialog() {
@@ -1346,12 +1549,12 @@ class MainActivity : AppCompatActivity() {
         }
         val currentQr = BikeMemory.selected(this)?.qr
         val ssidInput = EditText(this).apply {
-            hint = "ชื่อ Wi-Fi (SSID) เช่น A004DC0D30888555"
+            hint = getString(R.string.wifi_ssid_hint)
             setText(currentQr?.ssid ?: "")
             setSingleLine()
         }
         val pwdInput = EditText(this).apply {
-            hint = "รหัสผ่าน Wi-Fi (ค่ามาตรฐาน 12345678)"
+            hint = getString(R.string.wifi_password_hint)
             setText(currentQr?.pwd ?: "12345678")
             setSingleLine()
         }
@@ -1359,10 +1562,10 @@ class MainActivity : AppCompatActivity() {
         container.addView(pwdInput)
 
         AlertDialog.Builder(this)
-            .setTitle("ตั้งค่า Wi-Fi หน้าจอรถ")
-            .setMessage("ระบุ SSID และรหัสผ่านจากหน้าเมนู QR ของจอรถ:")
+            .setTitle(getString(R.string.wifi_dialog_title))
+            .setMessage(getString(R.string.wifi_dialog_message))
             .setView(container)
-            .setPositiveButton("บันทึกและเชื่อมต่อ") { _, _ ->
+            .setPositiveButton(getString(R.string.save_connect)) { _, _ ->
                 val ssid = ssidInput.text.toString().trim()
                 val pwd = pwdInput.text.toString().trim().ifBlank { "12345678" }
                 if (ssid.isNotBlank()) {
@@ -1372,11 +1575,11 @@ class MainActivity : AppCompatActivity() {
                         BikeMemory.save(this, raw, qr)
                         refreshSavedBikeInfo()
                         initSettingsState()
-                        startAutoProjection("บันทึกข้อมูลรถแล้ว — เริ่มเชื่อมต่ออัตโนมัติ")
+                        startAutoProjection(getString(R.string.bike_saved_start))
                     }
                 }
             }
-            .setNegativeButton("ยกเลิก", null)
+            .setNegativeButton(getString(R.string.tft_cancel), null)
             .show()
     }
 
@@ -1428,7 +1631,6 @@ class MainActivity : AppCompatActivity() {
                 ScreenFit.FILL -> rbFitFill.isChecked = true
             }
 
-            refreshAutoConnectButtonUi()
             refreshCalibrationUiReadouts()
             updateTftStatusText()
         } finally {
@@ -1436,67 +1638,280 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun refreshAutoConnectButtonUi() {
-        val enabled = AutoConnectPrefs.isAutoConnectEnabled(this)
-        if (enabled) {
-            btnToggleAutoConnect.text = "เปิดเชื่อมต่ออัตโนมัติอยู่ (แตะเพื่อปิด)"
-            btnToggleAutoConnect.setBackgroundResource(R.drawable.btn_liquid_emerald)
-            btnToggleAutoConnect.setTextColor(ContextCompat.getColor(this, R.color.text_primary))
-        } else {
-            btnToggleAutoConnect.text = "ปิดเชื่อมต่ออัตโนมัติไว้ (แตะเพื่อเปิด)"
-            btnToggleAutoConnect.setBackgroundResource(R.drawable.btn_liquid_pill)
-            btnToggleAutoConnect.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
-        }
-    }
-
     private fun refreshCalibrationUiReadouts() {
         val manualDpi = VideoPrefs.dpiOverride(this)
         val defaultDpi = BikeProfileHolder.active.aaVideo.dpi
         tvDpiValue.text = if (manualDpi != null) {
-            "แมนนวล: $manualDpi DPI"
+            getString(R.string.dpi_manual, manualDpi)
         } else {
-            "ค่าแนะนำ ($defaultDpi DPI)"
+            getString(R.string.dpi_recommended, defaultDpi)
         }
 
         val scale = ScreenMargins.scalePercent
-        tvScaleValue.text = if (scale == 100) "100% (เต็มสัดส่วน)" else "ย่อภาพ: $scale%"
-        tvMarginTop.text = "ขอบบน: ${ScreenMargins.top} px"
-        tvMarginBottom.text = "ขอบล่าง: ${ScreenMargins.bottom} px"
-        tvMarginLeft.text = "ขอบซ้าย: ${ScreenMargins.left} px"
-        tvMarginRight.text = "ขอบขวา: ${ScreenMargins.right} px"
+        tvScaleValue.text = if (scale == 100) getString(R.string.scale_full) else getString(R.string.scale_value, scale)
+        tvMarginTop.text = getString(R.string.margin_top_value, ScreenMargins.top)
+        tvMarginBottom.text = getString(R.string.margin_bottom_value, ScreenMargins.bottom)
+        tvMarginLeft.text = getString(R.string.margin_left_value, ScreenMargins.left)
+        tvMarginRight.text = getString(R.string.margin_right_value, ScreenMargins.right)
         refreshTouchOffsetUi()
     }
 
     private fun refreshTouchOffsetUi() {
         val cur = TouchPrefs.yOffset
         val label = when {
-            cur < 0 -> "$cur px (ชดเชยขึ้น)"
-            cur > 0 -> "+$cur px (ชดเชยลง)"
-            else -> "0 px (พอดีตรงกลาง)"
+            cur < 0 -> getString(R.string.touch_up_value, cur)
+            cur > 0 -> getString(R.string.touch_down_value, cur)
+            else -> getString(R.string.touch_center_value)
         }
         tvTouchYOffset.text = label
+    }
+
+    private fun setTftStudioOpen(open: Boolean) {
+        if (open && !::tftStudio.isInitialized) {
+            tftStudio = LiveDashboardStudio(
+                activity = this,
+                onFactoryRestore = ::restoreTftFactory,
+                onChooseBikeModel = ::chooseThaiBikeModel,
+                onToggleLiveDashboard = ::toggleRideScreenDashboard,
+                onChooseObd = ::chooseLiveObd,
+                onTestObd = { if (!LiveObd.startTest(this)) chooseLiveObd() },
+            )
+            tftStudioContainer.addView(tftStudio.view)
+        }
+        if (open) tftStudio.setLiveActive(RideScreenLiveDashboard.active)
+        if (!open) LiveObd.cancelTest(this)
+        tftStudioContainer.visibility = if (open) View.VISIBLE else View.GONE
+        btnTftToggleStudio.visibility = tftStudioContainer.visibility
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun chooseLiveObd() {
+        if (!LiveObd.hasPermission(this)) {
+            obdPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+            return
+        }
+        val devices = try {
+            LiveObd.pairedDevices(this)
+        } catch (_: SecurityException) {
+            emptyList()
+        }
+        val entries = arrayOf(getString(R.string.ridescreen_obd_disable)) +
+            devices.map { it.name ?: it.address }
+        val selected = devices.indexOfFirst { it.address == LiveObd.selectedAddress(this) } + 1
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.ridescreen_obd_choose)
+        if (devices.isEmpty()) dialog.setMessage(R.string.ridescreen_obd_unavailable)
+        else dialog.setSingleChoiceItems(entries, selected) { picker, index ->
+            LiveObd.select(this, devices.getOrNull(index - 1)?.address)
+            picker.dismiss()
+        }
+        dialog.setNegativeButton(R.string.tft_cancel, null)
+            .setNeutralButton(R.string.ridescreen_obd_pair) { _, _ ->
+                startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+            }
+        if (devices.isEmpty() && LiveObd.selectedAddress(this) != null) {
+            dialog.setPositiveButton(R.string.ridescreen_obd_disable) { _, _ ->
+                LiveObd.select(this, null)
+            }
+        }
+        dialog.show()
+    }
+
+    private fun chooseThaiBikeModel() {
+        val raw = BikeMemory.lastRaw(this)
+        if (raw.isNullOrBlank()) {
+            Toast.makeText(this, R.string.ridescreen_choose_bike_first, Toast.LENGTH_LONG).show()
+            return
+        }
+        val models = ThaiZontesModel.entries
+        val labels = arrayOf(getString(R.string.ridescreen_model_auto)) + models.map { it.label }
+        val current = ThaiZontesModelPrefs.selected(this, raw)
+        val selected = current?.let { models.indexOf(it) + 1 } ?: 0
+        AlertDialog.Builder(this)
+            .setTitle(R.string.ridescreen_choose_bike)
+            .setSingleChoiceItems(labels, selected) { dialog, index ->
+                ThaiZontesModelPrefs.set(this, raw, models.getOrNull(index - 1))
+                dialog.dismiss()
+                val notice = if (ProfilePrefs.get(this) == ProfileOverride.AUTO) R.string.ridescreen_model_next_connection
+                    else R.string.ridescreen_model_manual_override
+                Toast.makeText(this, notice, Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton(R.string.tft_cancel, null)
+            .show()
+    }
+
+    private fun toggleRideScreenDashboard() {
+        if (RideScreenLiveDashboard.active) {
+            RideScreenLiveDashboard.stop(this, byUser = true)
+            Toast.makeText(this, R.string.ridescreen_returned_to_aa, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val attempt = LiveDashboardLogAttempt(LiveDashboardLogAttempt.newId(), TftDiagnostics::recordLiveDashboard)
+        attempt.event(LiveDashboardEvent.REQUESTED)
+        val rejection = when {
+            !SessionService.isProjectionRequested -> LiveDashboardEvent.REJECTED_NO_PROJECTION
+            ConnectionState.phase != Phase.STREAMING -> LiveDashboardEvent.REJECTED_NOT_STREAMING
+            AaVideoBridge.pipeline == null -> LiveDashboardEvent.REJECTED_NO_PIPELINE
+            else -> null
+        }
+        if (rejection != null) {
+            attempt.event(rejection)
+            Toast.makeText(this, R.string.ridescreen_connect_first, Toast.LENGTH_LONG).show()
+            return
+        }
+        val started = try {
+            startService(Intent(this, SessionService::class.java).setAction(SessionService.ACTION_LIVE_DASHBOARD)
+                .putExtra(SessionService.EXTRA_LIVE_ATTEMPT, attempt.id)) != null
+        } catch (_: Exception) {
+            false
+        }
+        if (!started) {
+            attempt.event(LiveDashboardEvent.SERVICE_REQUEST_FAILED)
+            Toast.makeText(this, R.string.ridescreen_live_start_error, Toast.LENGTH_LONG).show()
+            return
+        }
+        Toast.makeText(this, R.string.ridescreen_live_started, Toast.LENGTH_LONG).show()
+    }
+
+    private fun restoreTftFactory() {
+        if (SessionService.isProjectionRequested) requestProjectionStop()
+        if (preparingTftFactoryCopy) return
+        preparingTftFactoryCopy = true
+        tftStudio.setFactoryCopyStatus(R.string.tft_backup_preparing)
+        lifecycleScope.launch {
+            try {
+                val status = withContext(Dispatchers.IO) { tftFactoryDownloads.prepareCopy() }
+                TftDiagnostics.recordFactoryCopy(status)
+                tftStudio.setFactoryCopyStatus(when (status) {
+                    TftFactoryBackup.CopyStatus.READY -> R.string.tft_backup_exported
+                    TftFactoryBackup.CopyStatus.NO_ORIGINAL -> R.string.tft_backup_missing
+                    TftFactoryBackup.CopyStatus.INVALID_ORIGINAL -> R.string.tft_backup_invalid
+                    TftFactoryBackup.CopyStatus.FAILED -> R.string.tft_backup_error
+                })
+            } finally {
+                preparingTftFactoryCopy = false
+            }
+        }
+    }
+
+    private fun setTftDetailsOpen(open: Boolean) {
+        if (open) updateTftStatusText()
+        tftDetailsContainer.visibility = if (open) View.VISIBLE else View.GONE
+        btnTftToggleDetails.setText(if (open) R.string.tft_close_details else R.string.tft_open_details)
+        btnTftToggleDetails.setBackgroundResource(if (open) R.drawable.btn_liquid_amber else R.drawable.btn_liquid_sapphire)
+    }
+
+    private suspend fun buildDiagnosticReportText(): String {
+        val history = TftDiagnostics.read()
+        val persistedTrace = TftDiagnostics.readTrace()
+        val liveTrace = LogBus.snapshot()
+            .lineSequence()
+            .filter(TftDiagnostics::isDiagnosticTraceLine)
+            .joinToString("\n")
+        val combinedTrace = if (persistedTrace.isNotBlank()) persistedTrace else liveTrace
+        val savedBike = BikeMemory.selected(this)
+        val qr = savedBike?.qr
+        val maskedSsid = qr?.ssid?.let { ProjectionHarness.maskIdentifier(it, masked = true) }
+        val phoneInfo = "${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE} / SDK ${Build.VERSION.SDK_INT})"
+        return TftDiagnostics.formatQuickReport(
+            diagnosticsText = history,
+            traceText = combinedTrace,
+            phoneInfo = phoneInfo,
+            appVersion = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+            activeProfileName = BikeProfileHolder.active.name,
+            savedQrModel = qr?.modelId,
+            maskedSsid = maskedSsid,
+            headunitStatus = AaVideoBridge.headunitStatus.name,
+            connectionPhase = ConnectionState.phase.name,
+        )
+    }
+
+    private fun copyTextToClipboard(report: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        clipboard?.setPrimaryClip(ClipData.newPlainText("RideLink TH Report", report))
+        Toast.makeText(this, R.string.tft_log_copied, Toast.LENGTH_LONG).show()
+    }
+
+    private fun showConnectionIssueReport() {
+        lifecycleScope.launch {
+            val phase = ConnectionState.phase
+            val headunit = AaVideoBridge.headunitStatus
+            val evidence = try {
+                ConnectionIssueEvidence.fromHistory(TftDiagnostics.read())
+            } catch (_: IOException) {
+                ConnectionIssueEvidence()
+            }
+            ConnectionIssueReportDialog(
+                this@MainActivity, evidence, phase, headunit, ConnectionIssueSubmission::send, ::showTftDiagnosticLog,
+            ).show()
+        }
+    }
+
+    private fun showTftDiagnosticLog() {
+        lifecycleScope.launch {
+            val report = try {
+                buildDiagnosticReportText()
+            } catch (_: IOException) {
+                Toast.makeText(this@MainActivity, R.string.tft_log_io_error, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val dialog = AlertDialog.Builder(this@MainActivity)
+                .setTitle(R.string.tft_log_title)
+                .setMessage(getString(R.string.tft_log_auto_info) + "\n\n" + report)
+                .setNegativeButton(R.string.close, null)
+                .setNeutralButton(R.string.tft_log_share) { _, _ ->
+                    val share = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, report)
+                    }
+                    startActivity(Intent.createChooser(share, getString(R.string.tft_log_share)))
+                }
+                .setPositiveButton(R.string.tft_log_copy) { _, _ ->
+                    copyTextToClipboard(report)
+                }
+                .show()
+            dialog.findViewById<TextView>(android.R.id.message)?.setTextIsSelectable(true)
+        }
     }
 
     private fun updateTftStatusText() {
         val p = BikeProfileHolder.active
         val v = BikeProfileHolder.aaVideo
         val panel = p.panelSize
-        val panelStr = if (panel != null) "${panel.first}×${panel.second}" else "${v.width}×${v.height}"
-        val autoStr = if (AutoConnectPrefs.isAutoConnectEnabled(this)) "เปิด (รอหน้าเมนู QR)" else "ปิด"
-        tvTftStatus.text =
-            "โปรไฟล์ที่ใช้งาน: ${p.name}\n" +
-            "ความละเอียดหน้าปัดรถ: $panelStr\n" +
-            "สัญญาณ Android Auto: ${v.width}×${v.height} @ ${v.dpi} DPI\n" +
-            "สเกลและการหลบขอบ: ${ScreenMargins.scalePercent}% " +
-            "(บน ${ScreenMargins.top} / ล่าง ${ScreenMargins.bottom} / ซ้าย ${ScreenMargins.left} / ขวา ${ScreenMargins.right} px)\n" +
-            "โหมด BT + QR Auto-Connect: $autoStr"
+        val unavailable = getString(R.string.tft_test_unavailable)
+        val panelStr = if (panel != null) "${panel.first}×${panel.second}" else unavailable
+        val streamInfo = getString(
+            R.string.tft_info, p.name, panelStr, "${v.width}×${v.height} @ ${v.dpi} DPI",
+            ScreenMargins.scalePercent, ScreenMargins.top, ScreenMargins.bottom,
+            ScreenMargins.left, ScreenMargins.right
+        )
+        val versions = ConnectionState.projectionVersions
+        val testStatus = if (ConnectionState.phase == Phase.STREAMING) {
+            getString(R.string.tft_test_streaming, versions?.client ?: unavailable, versions?.sdk ?: unavailable)
+        } else {
+            getString(R.string.tft_test_waiting)
+        }
+        tvTftStatus.text = listOf(streamInfo, testStatus, getString(R.string.tft_test_factory_scope)).joinToString("\n\n")
     }
 
     private fun selectTab(index: Int) {
+        if (index != 1) {
+            voiceAfterPermission = false
+            AaVideoBridge.voiceMicrophone?.stop()
+        }
         activeTabIndex = index
         val panes = listOf(paneDashboard, paneScreen, paneTft, paneSettings)
         panes.forEachIndexed { i, pane ->
             pane.visibility = if (i == index) View.VISIBLE else View.GONE
+        }
+        val showTft = index == 2
+        tvAppTagline.setText(if (showTft) R.string.tft_tab_tagline else R.string.app_tagline)
+        tftSyncActionBar.visibility = if (showTft) View.VISIBLE else View.GONE
+        mainScrollView.updateLayoutParams<RelativeLayout.LayoutParams> {
+            addRule(RelativeLayout.ABOVE, if (showTft) R.id.tftSyncActionBar else R.id.bottomDockContainer)
+        }
+        if (showTft) {
+            updateTftStatusText()
+            updateConnectionUI(ConnectionState.phase, ConnectionState.detail)
         }
 
         val tabs = listOf(tabDashboard, tabScreen, tabTft, tabSettings)

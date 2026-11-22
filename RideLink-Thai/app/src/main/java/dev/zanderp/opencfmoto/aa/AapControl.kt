@@ -41,11 +41,8 @@ internal class AapControlMedia(private val aapTransport: AapTransport) : AapCont
                 return 0
             }
             Media.MsgType.MEDIA_MESSAGE_MICROPHONE_REQUEST_VALUE -> {
-                // AA wants the mic (Assistant starting/stopping). Open it and stream PCM back —
-                // voice is the only hands-free way to set a destination on a bike.
                 val req = message.parse(Media.MicrophoneRequest.newBuilder()).build()
-                AaLog.i("RX: Microphone request open=%b", req.open)
-                aapTransport.microphone?.onRequest(req.open, message.channel)
+                aapTransport.microphone.onRequest(req.open, message.channel, aapTransport.getSessionId(message.channel))
                 return 0
             }
             Media.MsgType.MEDIA_MESSAGE_UPDATE_UI_CONFIG_REPLY_VALUE -> {
@@ -66,8 +63,6 @@ internal class AapControlMedia(private val aapTransport: AapTransport) : AapCont
             dev.zanderp.opencfmoto.AaVideoBridge.noteAaAudioActive()
         }
         aapTransport.setSessionId(channel, request.sessionId)
-        // The mic must echo this session id back in its MICROPHONE_RESPONSE.
-        if (channel == Channel.ID_MIC) aapTransport.microphone?.setSessionId(request.sessionId)
         return 0
     }
 

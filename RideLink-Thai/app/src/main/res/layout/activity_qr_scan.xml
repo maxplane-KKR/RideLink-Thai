@@ -47,7 +47,7 @@
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:background="@drawable/card_inner_glass"
-            android:contentDescription="กลับ"
+            android:contentDescription="@string/qr_back"
             android:src="@drawable/ic_back_vector"
             app:tint="@color/text_primary" />
 
@@ -61,7 +61,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="สแกน QR หน้าจอรถ"
+                android:text="@string/qr_title"
                 android:textColor="@color/text_primary"
                 android:textSize="15sp"
                 android:textStyle="bold" />
@@ -70,7 +70,7 @@
                 android:id="@+id/tvScanStatus"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="มีระบบ Auto Zoom &amp; Auto Focus"
+                android:text="@string/qr_initial"
                 android:textColor="@color/cyan_neon"
                 android:textSize="11sp" />
         </LinearLayout>
@@ -80,7 +80,7 @@
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:background="@drawable/card_inner_glass"
-            android:contentDescription="เปิดไฟฉาย"
+            android:contentDescription="@string/qr_torch_on"
             android:src="@drawable/ic_flash_vector"
             app:tint="@color/amber_accent" />
     </LinearLayout>
@@ -143,7 +143,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginBottom="12dp"
-            android:text="🔍 แตะหน้าจอเพื่อโฟกัส หรือให้กล้องซูมอัตโนมัติ"
+            android:text="@string/qr_camera_hint"
             android:textColor="@color/text_secondary"
             android:textSize="11sp" />
 
@@ -154,7 +154,7 @@
             android:background="@drawable/btn_liquid_ruby"
             android:backgroundTint="@null"
             android:stateListAnimator="@null"
-            android:text="ยกเลิก"
+            android:text="@string/tft_cancel"
             android:textColor="@color/text_primary"
             android:textSize="12sp"
             android:textStyle="bold" />

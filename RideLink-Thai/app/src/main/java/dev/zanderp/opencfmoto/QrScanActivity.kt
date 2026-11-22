@@ -66,7 +66,7 @@ class QrScanActivity : AppCompatActivity() {
         if (granted) {
             startCamera()
         } else {
-            Toast.makeText(this, "จำเป็นต้องใช้สิทธิ์กล้องเพื่อสแกน QR รถ", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.camera_required), Toast.LENGTH_SHORT).show()
             finish()
         }
     }
@@ -106,7 +106,7 @@ class QrScanActivity : AppCompatActivity() {
             control.setZoomRatio(zoomRatio)
             runOnUiThread {
                 updateZoomButtonUi(zoomRatio)
-                tvScanStatus.text = "🔍 ซูมอัตโนมัติ (%.1fx)".format(zoomRatio)
+                tvScanStatus.text = getString(R.string.qr_auto_zoom, zoomRatio)
             }
             true
         }.setMaxSupportedZoomRatio(4.0f).build()
@@ -133,6 +133,7 @@ class QrScanActivity : AppCompatActivity() {
             val control = camera?.cameraControl ?: return@setOnClickListener
             isTorchOn = !isTorchOn
             control.enableTorch(isTorchOn)
+            btnToggleTorch.contentDescription = getString(if (isTorchOn) R.string.qr_torch_off else R.string.qr_torch_on)
             btnToggleTorch.setColorFilter(
                 ContextCompat.getColor(this, if (isTorchOn) R.color.green_neon else R.color.amber_accent)
             )
@@ -151,7 +152,7 @@ class QrScanActivity : AppCompatActivity() {
                     .setAutoCancelDuration(3, TimeUnit.SECONDS)
                     .build()
                 camera?.cameraControl?.startFocusAndMetering(action)
-                tvScanStatus.text = "🎯 โฟกัสตามจุดที่แตะ"
+                tvScanStatus.text = getString(R.string.qr_tap_focused)
             }
             true
         }
@@ -262,9 +263,9 @@ class QrScanActivity : AppCompatActivity() {
                             triggerHapticSuccess()
                             BikeMemory.save(this, raw, parsed)
                             runOnUiThread {
-                                tvScanStatus.text = "✅ สแกนสำเร็จ: ${parsed.ssid}"
+                                tvScanStatus.text = getString(R.string.qr_success_mark, parsed.ssid)
                                 tvScanStatus.setTextColor(ContextCompat.getColor(this, R.color.green_neon))
-                                Toast.makeText(this, "สแกนสำเร็จ: ${parsed.ssid}", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this, getString(R.string.qr_success, parsed.ssid), Toast.LENGTH_SHORT).show()
                                 val data = Intent().apply {
                                     putExtra("raw_qr", raw)
                                     putExtra("ssid", parsed.ssid)
@@ -274,9 +275,9 @@ class QrScanActivity : AppCompatActivity() {
                             }
                             break
                         } else if (!isScanned) {
-                            val hint = QrData.parseFailureHint(raw)
+                            val hint = QrData.parseFailureHint(raw)?.let(::getString)
                             runOnUiThread {
-                                tvScanStatus.text = hint ?: "⚠️ ตรวจพบ QR แต่ไม่ใช่ Wi-Fi สำหรับต่อจอรถ"
+                                tvScanStatus.text = hint ?: getString(R.string.qr_wrong_code)
                             }
                         }
                     }
@@ -335,7 +336,7 @@ class QrScanActivity : AppCompatActivity() {
                 runOnUiThread {
                     camera?.cameraControl?.setZoomRatio(targetZoom)
                     updateZoomButtonUi(targetZoom)
-                    tvScanStatus.text = "🎯 ล็อกเป้า & ซูมอัตโนมัติ (%.1fx)".format(targetZoom)
+                    tvScanStatus.text = getString(R.string.qr_locked_zoom, targetZoom)
                 }
 
                 // Point auto-focus and auto-exposure metering directly at the center of the reticle

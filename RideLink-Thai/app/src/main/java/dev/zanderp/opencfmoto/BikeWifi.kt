@@ -36,22 +36,38 @@ import android.os.SystemClock
  */
 object BikeWifi {
     private var cm: ConnectivityManager? = null
-    private var callback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var callback: ConnectivityManager.NetworkCallback? = null
     private var request: NetworkRequest? = null
-    private var generalCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var generalCallback: ConnectivityManager.NetworkCallback? = null
     private val handler = Handler(Looper.getMainLooper())
     private var appContext: Context? = null
 
-    var currentNetwork: Network? = null
-        private set
+    private val networkState = BikeWifiNetworkState<Network>()
+    val currentNetwork: Network? get() = networkState.current
 
     @Volatile private var active = false
-    @Volatile private var firstDelivered = false
+    private val firstDelivered: Boolean get() = networkState.everDelivered
     private var rejoinAttempts = 0
     private var ssid: String = ""
     private var onAvailableCb: ((Network) -> Unit)? = null
     private var onLostCb: (() -> Unit)? = null
     private var logCb: ((String) -> Unit)? = null
+    @Volatile private var publishProjectionState: (() -> Unit) -> Unit = { it() }
+    private val retryScheduler = ConnectionRetryScheduler(
+        post = { task, delay -> handler.postDelayed(task, delay) },
+        remove = { task -> handler.removeCallbacks(task) },
+        eligible = { active && currentNetwork == null },
+        retry = {
+            logCb?.invoke("re-requesting bike Wi-Fi (attempt $rejoinAttempts) …")
+            val publish = publishProjectionState
+            publish {
+                if (ConnectionState.phase != Phase.WAITING_FOR_BIKE) {
+                    ConnectionState.set(Phase.RECONNECTING, R.string.conn_joining_wifi)
+                }
+            }
+            registerCallback()
+        },
+    )
 
     // Watch for the bike's AP until the rider taps Stop (leave()): a stopped bike may be off for a
     // while, and re-issuing the (approved, silent) request is cheap. Backoff grows then caps so we
@@ -79,22 +95,29 @@ object BikeWifi {
         psk: String,
         onAvailable: (Network) -> Unit,
         onLost: () -> Unit,
+        publishProjectionState: (() -> Unit) -> Unit = { it() },
         log: (String) -> Unit,
     ) {
         val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         // Tear down any previous session's callback first.
+        active = false
+        retryScheduler.cancel()
         handler.removeCallbacksAndMessages(null)
         callback?.let { try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {} }
         generalCallback?.let { try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {} }
+        callback = null
+        generalCallback = null
+        networkState.reset()
+        linkLogged = false
 
         this.appContext = context.applicationContext
         this.cm = cm
         this.ssid = ssid
         this.onAvailableCb = onAvailable
         this.onLostCb = onLost
+        this.publishProjectionState = publishProjectionState
         this.logCb = log
         this.active = true
-        this.firstDelivered = false
         this.rejoinAttempts = 0
 
         // 1. Suggest network credentials on Android 10+ so OS can auto-join silently
@@ -116,10 +139,13 @@ object BikeWifi {
         // 2. Register general Wi-Fi callback to capture background system connection immediately
         val genCb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(net: Network) {
-                checkAndDeliverBikeNet(net)
+                if (generalCallback === this) checkAndDeliverBikeNet(net)
             }
             override fun onCapabilitiesChanged(net: Network, caps: NetworkCapabilities) {
-                checkAndDeliverBikeNet(net)
+                if (generalCallback === this) checkAndDeliverBikeNet(net)
+            }
+            override fun onLost(net: Network) {
+                if (generalCallback === this) handleNetworkLost(net)
             }
         }
         generalCallback = genCb
@@ -170,14 +196,34 @@ object BikeWifi {
         }
 
         if (matches) {
-            currentNetwork = net
-            rejoinAttempts = 0
-            if (!firstDelivered) {
-                firstDelivered = true
-                logCb?.invoke("Wi-Fi joined via system auto-connect: $ssid (network=$net)")
-                onAvailableCb?.invoke(net)
-            }
+            deliverNetwork(net, viaSystem = true)
         }
+    }
+
+    private fun deliverNetwork(network: Network, viaSystem: Boolean) {
+        if (!active) return
+        val change = networkState.available(network)
+        if (change == BikeWifiNetworkState.Available.UNCHANGED) return
+        retryScheduler.cancel()
+        rejoinAttempts = 0
+        logLinkOnce(network)
+        when {
+            change == BikeWifiNetworkState.Available.REACQUIRED ->
+                logCb?.invoke("Wi-Fi re-acquired: $ssid — restarting bike link on fresh network")
+            viaSystem -> logCb?.invoke("Wi-Fi joined via system auto-connect: $ssid (network=$network)")
+            else -> logCb?.invoke("Wi-Fi joined: $ssid (network=$network, bind deferred until AA video)")
+        }
+        onAvailableCb?.invoke(network)
+    }
+
+    private fun handleNetworkLost(network: Network) {
+        if (!active || !networkState.lost(network)) return
+        logCb?.invoke("Wi-Fi lost: $network")
+        linkLogged = false
+        // เครือข่ายที่หลุดต้องไม่ค้างเป็น process binding ของ AA และ PXC
+        unbindProcess()
+        onLostCb?.invoke()
+        if (active) scheduleRejoin()
     }
 
     /**
@@ -191,44 +237,39 @@ object BikeWifi {
         psk: String,
         onAvailable: (Network) -> Unit,
         onLost: () -> Unit,
+        publishProjectionState: (() -> Unit) -> Unit = { it() },
         log: (String) -> Unit,
     ) {
         val net = currentNetwork
         if (active && net != null && this.ssid.equals(ssid, ignoreCase = true)) {
             this.onAvailableCb = onAvailable
             this.onLostCb = onLost
+            this.publishProjectionState = publishProjectionState
             this.logCb = log
             log("Wi-Fi already joined: $ssid — skipping re-join (mode switch)")
             onAvailable(net)
             return
         }
-        join(context, ssid, psk, onAvailable, onLost, log)
+        join(context, ssid, psk, onAvailable, onLost, publishProjectionState, log)
     }
 
     private fun registerCallback() {
         val cm = cm ?: return
         val req = request ?: return
-        callback?.let { try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {} }
+        val previous = callback
+        callback = null
+        previous?.let { try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {} }
+        val publish = publishProjectionState
 
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                currentNetwork = network
+                if (callback !== this) return
                 // Do not bindProcessToNetwork here. Binding the process to the bike AP removes
                 // the 127.0.0.1 route (AaReceiver.connectLoopback). That dropped AA ~500ms after
                 // a successful handshake on DIRECT-go-CFMOTO / 800NK before video went steady.
                 // [BikeLink] / [EasyConnProber] call [rebindProcessToBike] when PXC actually starts.
                 // AppHttp.ensureCellularUplink()
-                rejoinAttempts = 0
-                appContext?.let { ctx -> BikeAutoWatcher.markSsidApproved(ctx, ssid) }
-                logLinkOnce(network)
-                if (!firstDelivered) {
-                    firstDelivered = true
-                    logCb?.invoke("Wi-Fi joined: $ssid (network=$network, bind deferred until AA video)")
-                    onAvailableCb?.invoke(network)
-                } else {
-                    logCb?.invoke("Wi-Fi re-acquired: $ssid — restarting bike link on fresh network")
-                    onAvailableCb?.invoke(network)
-                }
+                deliverNetwork(network, viaSystem = false)
             }
 
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
@@ -236,17 +277,11 @@ object BikeWifi {
             }
 
             override fun onLost(network: Network) {
-                logCb?.invoke("Wi-Fi lost: $network")
-                currentNetwork = null
-                linkLogged = false
-                // Drop the process bind immediately. Leaving it pinned to a dead Network causes
-                // ENONET on loopback binds (AA :5288) and probes until the rider taps Stop.
-                unbindProcess()
-                onLostCb?.invoke()
-                if (active) scheduleRejoin()
+                if (callback === this) handleNetworkLost(network)
             }
 
             override fun onUnavailable() {
+                if (callback !== this || !active || currentNetwork != null) return
                 val timeoutSec = (if (firstDelivered) REJOIN_TIMEOUT_MS else FIRST_JOIN_TIMEOUT_MS) / 1000
                 logCb?.invoke(
                     "Wi-Fi join unavailable after ${timeoutSec}s " +
@@ -259,9 +294,9 @@ object BikeWifi {
                             "or join that network in Settings → Wi‑Fi, then Connect again",
                     )
                     try {
-                        val detail = appContext?.getString(R.string.conn_detail_wifi_picker)
-                            ?: "approve the Wi‑Fi / device picker, then Connect again"
-                        ConnectionState.set(Phase.ERROR, detail)
+                        publish {
+                            try { ConnectionState.set(Phase.ERROR, R.string.conn_detail_wifi_picker) } catch (_: Exception) {}
+                        }
                     } catch (_: Exception) {
                     }
                 }
@@ -313,16 +348,11 @@ object BikeWifi {
             rejoinAttempts <= 1 -> REJOIN_FAST_MS
             else -> minOf(REJOIN_BASE_MS * (rejoinAttempts - 1), REJOIN_MAX_MS)
         }
-        handler.postDelayed({
-            if (!active) return@postDelayed
-            logCb?.invoke("re-requesting bike Wi-Fi (attempt $rejoinAttempts) …")
-            // Don't stomp the WAITING_FOR_BIKE state the service sets once AA is parked.
-            if (ConnectionState.phase != Phase.WAITING_FOR_BIKE) {
-                ConnectionState.set(Phase.RECONNECTING, "waiting for bike Wi-Fi")
-            }
-            registerCallback()
-        }, delay)
+        retryScheduler.schedule(delay)
     }
+
+    /** กดเริ่มซ้ำแล้วเร่งเฉพาะการลองที่รออยู่ ไม่ยกเลิกตัวเลือก Wi-Fi ที่กำลังเปิด */
+    internal fun retryPendingJoinNow(): Boolean = retryScheduler.retryNow()
 
     /**
      * Best-effort "is the bike's hotspot nearby?" check for auto-connect. Deliberately biased toward
@@ -389,6 +419,7 @@ object BikeWifi {
 
     fun leave(context: Context, log: (String) -> Unit) {
         active = false
+        retryScheduler.cancel()
         handler.removeCallbacksAndMessages(null)
         val cm = this.cm ?: (context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
         callback?.let {
@@ -399,10 +430,9 @@ object BikeWifi {
             try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {}
         }
         generalCallback = null
-        firstDelivered = false
+        networkState.reset()
         linkLogged = false
         unbindProcess(cm)
-        currentNetwork = null
         log("Wi-Fi released")
     }
 

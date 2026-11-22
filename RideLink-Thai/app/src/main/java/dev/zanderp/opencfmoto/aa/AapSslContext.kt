@@ -8,7 +8,7 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLEngineResult
 
-class AapSslContext(keyManager: SingleKeyKeyManager) : AapSsl {
+class AapSslContext internal constructor(keyManager: SingleKeyKeyManager) : AapSsl {
     private val sslContext: SSLContext = createSslContext(keyManager)
     private lateinit var sslEngine: SSLEngine
     private lateinit var txBuffer: ByteBuffer

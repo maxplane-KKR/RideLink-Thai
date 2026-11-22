@@ -69,12 +69,19 @@ object AaVideoBridge {
 
     /** True while an AAP session is up on :5288 / :5277 (set only AFTER version+TLS handshake). */
     @Volatile var aaSessionLive: Boolean = false
+    @Volatile var headunitSessionLive: Boolean = false
 
     /** True while a claimed socket is running the AAP handshake (not yet live). */
     @Volatile var aaHandshaking: Boolean = false
 
     /** Last outcome of the coordinator's real :5277 attempt — the UI reads this, never probes. */
+    @Volatile var headunitStatusListener: (() -> Unit)? = null
     @Volatile var headunitStatus: ProjectionHarness.HeadunitLinkStatus = ProjectionHarness.HeadunitLinkStatus.UNKNOWN
+        set(value) {
+            if (field == value) return
+            field = value
+            headunitStatusListener?.invoke()
+        }
 
     /** True if an AAP session came up at least once this Connect. */
     @Volatile var aaSessionSeen: Boolean = false
@@ -112,6 +119,7 @@ object AaVideoBridge {
 
     /** Phone/handlebar D-pad & Virtual Stick → Android Auto input bridge. */
     @Volatile var keySink: ((keycode: Int) -> Unit)? = null
+    @Volatile internal var voiceMicrophone: dev.zanderp.opencfmoto.aa.AaMicrophone? = null
 
     /** Rotary-knob → Android Auto bridge (-1 = prev, +1 = next). */
     @Volatile var scrollSink: ((delta: Int) -> Unit)? = null
@@ -122,6 +130,7 @@ object AaVideoBridge {
     /** Reset all transient session flags cleanly between reconnects. */
     fun resetSessionState() {
         aaSessionLive = false
+        headunitSessionLive = false
         aaHandshaking = false
         aaSessionSeen = false
         aaDecoding = false
@@ -130,6 +139,7 @@ object AaVideoBridge {
         touchSink = null
         previewTouchSink = null
         keySink = null
+        voiceMicrophone = null
         scrollSink = null
         nightSink = null
         try { fpsListener?.invoke(0) } catch (_: Exception) {}

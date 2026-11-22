@@ -11,9 +11,9 @@
 
 <p align="center">
   <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/latest">
-    <img src="https://img.shields.io/badge/Latest%20Release-v0.2.9-00C853?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" />
+    <img src="https://img.shields.io/badge/Latest%20Release-v0.2.11-00C853?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" />
   </a>
-  <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.9/RideLink-Thai-v0.2.9.apk">
+  <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.11/RideLink-Thai-v0.2.11.apk">
     <img src="https://img.shields.io/badge/Download-APK%20(Direct)-2962FF?style=for-the-badge&logo=android&logoColor=white" alt="Download APK" />
   </a>
 </p>
@@ -33,8 +33,12 @@
 
 Download the pre-compiled Android package (`.apk`) directly to your phone:
 
-* 📱 **[Download RideLink-Thai-v0.2.9.apk (Direct Link)](https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.9/RideLink-Thai-v0.2.9.apk)**
+* 📱 **[ดาวน์โหลด RideLink-Thai-v0.2.11.apk](https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.11/RideLink-Thai-v0.2.11.apk)** สำหรับ Android 10 ขึ้นไป
 * 📦 **[All Release Versions on GitHub Releases](https://github.com/maxplane-KKR/RideLink-Thai/releases)**
+
+SHA-256: `cd9e5f076a921e91051376f560f54e9ee459a747d0142d02d7f0ac6131e7755d`
+
+**สำหรับผู้ใช้ 0.2.9** รุ่น 0.2.11 ใช้ลายเซ็นต่างจาก 0.2.9 จึงต้องถอนรุ่นเดิมก่อนติดตั้ง การถอนอาจลบข้อมูลและการตั้งค่าในแอป โปรดจดข้อมูลที่ต้องการเก็บก่อนดำเนินการ
 
 ---
 
@@ -49,12 +53,13 @@ Instead of simple screen-casting that mirrors your phone's lockscreen or forces 
 ## 🚀 Key Features
 
 * **🏎️ Direct Cluster Projection**: Full Android Auto experience on your dashboard (Google Maps, Waze, Spotify, YouTube Music, Phone calls, Messaging).
-* **⚡ Smart Wi-Fi Watchdog & PXC Handoff**: Automatic background handshake when your bike shows its connection QR code. Never freezes or drops into dead connection loops.
+* **⚡ เชื่อมต่อรถผ่าน Wi-Fi**: สแกน QR หรือบันทึก Wi-Fi รถ แล้วเริ่มเชื่อมต่อจากแดชบอร์ด
+* **🎛️ หน้าปัดสด 14 ธีม**: แสดงความเร็วจาก GPS และข้อมูลที่ ECU รองรับผ่านตัวอ่าน OBD2
 * **🎮 Built-In Cockpit Controls (For Non-Touch Screens)**:
   * Dedicated **Virtual Joystick** (D-Pad navigation)
   * **Rotary Knob Focus** & Confirm triggers
   * **Precision Glide Trackpad** with on-screen visual cursor
-* **🎯 1:1 Pixel-Accurate Touchscreen Mapping**: GPU Compositor coordinates guarantee every tap on the liveview hits the exact button in Android Auto.
+* **🎯 ปรับตำแหน่งการสัมผัส**: ตั้งค่าระยะขอบและตำแหน่งภาพให้เหมาะกับหน้าจอรถ
 * **🔘 Dual-Dispatch Quick Actions**: Dedicated on-screen shortcut buttons for:
   * **Maps** (Instant navigation toggle)
   * **Voice Command** (Google Assistant push-to-talk)
@@ -94,15 +99,9 @@ Instead of simple screen-casting that mirrors your phone's lockscreen or forces 
 
 ---
 
-## 🏍️ Supported Motorcycles & Dashboards
+## 🏍️ รุ่นรถและหน้าจอ
 
-| Manufacturer | Models | TFT Resolution | Input Control |
-| :--- | :--- | :--- | :--- |
-| **Zontes** | 150X, 150D, 150M, 350D, 350M, 350T, 310 Series | 800 × 480 (5:3) | Switchgear / Virtual Joystick |
-| **Zontes** | 368G ADV, 368E, 350E, 703F, 703RR | 1280 × 720 (16:9) | Switchgear / Virtual Joystick |
-| **CFMoto** | 800MT, 800NK, 450MT, 450SR, 700CL-X | 800 × 480 / 1280 × 720 | Touchscreen / Handlebar buttons |
-| **Moto Morini** | X-Cape 650 / 1200, Seiemmezzo | 800 × 480 | Handlebar switchgear |
-| **Generic PXC** | Any motorcycle / scooter equipped with EasyConn / Carbit cluster | Auto-detected | Adaptive |
+แอปมีตัวเลือกหน้าปัดสดสำหรับ Zontes 150X, 350D, 350E, 368D, 368E, 368G และ 368K ความเข้ากันได้ขึ้นอยู่กับรุ่นรถ ปีรถ เฟิร์มแวร์หน้าจอ และอุปกรณ์ที่ใช้
 
 ---
 
@@ -112,6 +111,7 @@ Instead of simple screen-casting that mirrors your phone's lockscreen or forces 
 * Android Studio Iguana / Jellyfish (or command-line tools)
 * Android SDK 34 (Build Tools 34.0.0)
 * JDK 17
+* Gradle 8.9
 * PowerShell (for automated build script)
 
 ### Build Debug APK
@@ -125,13 +125,9 @@ cd RideLink-Thai
 # Using the automated build script
 .\RideLink-Thai\scripts\Build.ps1
 
-# Or via Gradle directly
-cd RideLink-Thai
-.\gradlew assembleDebug
 ```
 
-The output APK will be generated at:
-`APK/RideLink-Thai-latest.apk` or `RideLink-Thai/app/build/outputs/apk/debug/app-debug.apk`.
+ไฟล์ APK ล่าสุดจะอยู่ในโฟลเดอร์ `APK` ที่ระดับโฟลเดอร์แม่ของ repository หากมีอยู่แล้ว หรือใน `APK` ภายใน repository ส่วนไฟล์บิลด์ชั่วคราวอยู่ใน LocalAppData
 
 ---
 

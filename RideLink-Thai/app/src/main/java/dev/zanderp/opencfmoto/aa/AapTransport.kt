@@ -1,5 +1,5 @@
 // Adapted from headunit-revived (AGPLv3): aap/AapTransport.kt
-// Trimmed for video-only headless projection: no audio decoder / audio manager / mic recorder /
+// Trimmed for headless projection: no audio decoder / audio manager /
 // notification / Settings. Keeps the send+poll HandlerThreads, the AAP version+SSL handshake,
 // and the inbound message loop. gainVideoFocus's Activity broadcast is gone (AapControlMedia
 // grants video focus directly).
@@ -19,7 +19,8 @@ class AapTransport(
     private val context: Context,
     private val externalSsl: AapSslContext? = null
 ) {
-    val ssl: AapSsl = externalSsl ?: AapSslContext(SingleKeyKeyManager(context))
+    val ssl: AapSsl = externalSsl ?: AapSslContext(SingleKeyKeyManager.fromResources(context))
+    internal val microphone = AaMicrophone(context, this)
 
     internal val aapVideo: AapVideo
     private var sendThread: HandlerThread? = null
@@ -34,9 +35,6 @@ class AapTransport(
     @Volatile var wasUserExit: Boolean = false
     @Volatile var onQuit: ((Boolean) -> Unit)? = null
 
-    /** The head unit's microphone (Assistant voice). Installed by [AaReceiver]; driven by AA's
-     *  MICROPHONE_REQUEST via [AapControlMedia]. Null until a session is set up. */
-    @Volatile var microphone: AaMicrophone? = null
 
     private var pollHandler: Handler? = null
     private val pollHandlerCallback = Handler.Callback {
@@ -301,6 +299,8 @@ class AapTransport(
     internal fun sendMediaAck(channel: Int) = send(MediaAck(channel, sessionIds.get(channel)))
 
     internal fun setSessionId(channel: Int, sessionId: Int) = sessionIds.put(channel, sessionId)
+
+    internal fun getSessionId(channel: Int): Int = sessionIds.get(channel)
 
     companion object {
         private const val MSG_POLL = 1

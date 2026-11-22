@@ -110,7 +110,7 @@ class ServiceDiscoveryResponse
                 }.build()
             }.build())
 
-            // --- Microphone service (required for AA connection / Assistant) ---
+            // Phone microphone used only for voice commands armed from the AA tab.
             services.add(Control.Service.newBuilder().also { service ->
                 service.id = Channel.ID_MIC
                 service.mediaSourceService = Control.Service.MediaSourceService.newBuilder().also { src ->

@@ -48,3 +48,14 @@ RideLink-Thai/design/
 RideLink-Thai/vendor/
 RideLink-Thai/upstream-files.json
 RideLink-Thai/scripts/*.py
+
+# สำเนาเว็บพรีวิวก่อนแยกรีโป
+/docs/monetization-preview.html
+/docs/android-auto-demo.css
+/docs/android-auto-demo.js
+/docs/live-dashboard-classic.js
+/docs/live-dashboard-concepts.js
+/docs/live-dashboard-preview.js
+/docs/screenshots/aa-connect-0211.webp
+/docs/screenshots/aa-controller-0211.webp
+/docs/screenshots/aa-tft-render.webp

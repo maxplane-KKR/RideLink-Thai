@@ -164,6 +164,10 @@ object BikeProfiles {
             log("[profile] manual override → ${it.name}")
             return it
         }
+        if (ThaiZontesModels.byQrModelId(info.optString("channel"))?.motoPlayBaseline == true) {
+            log("[profile] RideScreen known Zontes channel → MotoPlay Landscape")
+            return Cfdl16MotoPlayLandscapeProfile
+        }
         val scored = all.map { it to it.score(info) }
         log("[profile] scores=" + scored.joinToString { "${it.first.name}=${it.second}" })
         return scored.filter { it.second > 0 }.maxByOrNull { it.second }?.first ?: legacy
@@ -175,11 +179,13 @@ object BikeProfiles {
      */
     fun selectByQr(qr: QrData?, context: android.content.Context? = null): BikeProfile {
         BikeProfileHolder.profileOverride.resolve()?.let { return it }
-        val base = selectByQrGuess(qr)
+        val selected = context?.let { ThaiZontesModelPrefs.selected(it) }
+        val hint = ThaiZontesModels.screenHint(qr?.modelId, selected)
+        val base = if (hint?.motoPlayBaseline == true) Cfdl16MotoPlayLandscapeProfile else selectByQrGuess(qr)
         if (context == null || qr == null) return base
-        val panel = DashMemory.get(context, qr.ssid) ?: return base
+        val panel = ThaiZontesModels.preferMeasured(DashMemory.get(context, qr.ssid), hint) ?: return base
         if (panel == base.panelSize) return base
-        val res = DashMemory.bestFit(panel.first, panel.second) ?: return base
+        val res = DashMemory.bestFit(panel.first, panel.second) ?: base.aaVideo.resolution
         LogBus.log(
             "[panel] using measured ${panel.first}x${panel.second} → AA ${res.w}x${res.h} " +
                 "(was ${base.name})",
@@ -201,7 +207,7 @@ object BikeProfiles {
         if (qr.ssid.startsWith("ZT", ignoreCase = true) ||
             qr.ssid.contains("ZONTES", ignoreCase = true) ||
             ProjectionHarness.isZontesCarbitHexSsid(qr.ssid) ||
-            qr.modelId in setOf("21340", "ZONTES", "ZT150X", "150X", "350D", "350M", "310T", "310X") ||
+            qr.modelId in setOf("21340", "48406", "ZONTES", "ZT150X", "150X", "350D", "350M", "310T", "310X") ||
             qr.channel == "21340"
         ) {
             return ZontesProfile
@@ -587,13 +593,10 @@ object Cfdl26PortraitProfile : BikeProfile {
         // did — 0x10780 (log), 0x103a0 (OTA FTP creds), 0x10020 (media-feature flags), and possibly
         // more — and will NOT connect to the media ports until each is acked. The whole PXC protocol
         // acks with reply = cmd+1 (empty), so ack every otherwise-unhandled control frame that way.
-        val body = if (frame.payload.isEmpty()) "" else String(frame.payload, Charsets.UTF_8)
-        val hex = if (frame.payload.isEmpty()) "" else
-            " hex=" + frame.payload.copyOf(minOf(48, frame.payload.size)).joinToString("") { "%02x".format(it) }
         val tag2 = if (frame.cmd == PxcFrame.CMD_SCREEN_TOUCH) " *** SCREEN_TOUCH ***" else ""
         val ack = frame.cmd + 1
         log("[$tag] CFDL26 ctrl ${frame.cmdHex()} (${PxcFrame.nameOf(frame.cmd)})$tag2 len=${frame.payload.size} " +
-            "$body$hex → ack 0x${ack.toUInt().toString(16)} (empty)")
+            "[payload omitted] → ack 0x${ack.toUInt().toString(16)} (empty)")
         PxcFrame(ack, ByteArray(0)).write(out)
         return true
     }
@@ -704,10 +707,10 @@ object ClC450Profile : BikeProfile {
 }
 
 /** Wraps a base profile with a measured panel + AA resolution for the next connect. */
-private class LearnedGeometryProfile(
+internal data class LearnedGeometryProfile(
     private val base: BikeProfile,
-    panel: Pair<Int, Int>,
-    resolution: AaResolution,
+    private val panel: Pair<Int, Int>,
+    private val resolution: AaResolution,
 ) : BikeProfile by base {
     override val name = "${base.name} + measured ${panel.first}x${panel.second}"
     override val aaVideo = AaVideoSpec(resolution, dpi = base.aaVideo.dpi)
@@ -783,7 +786,7 @@ object ZontesProfile : BikeProfile {
     override val aaVideo = AaVideoSpec(AaResolution.LANDSCAPE_800x480, dpi = ProjectionHarness.ZONTES_5INCH_RECOMMENDED_DPI)
 
     override fun matchesModelId(modelId: String): Boolean =
-        modelId.trim() in setOf("21340", "ZONTES", "ZT150X", "150X", "350D", "350M", "310T", "310X", "310R", "310V", "350T", "350GK")
+        modelId.trim() in setOf("21340", "48406", "ZONTES", "ZT150X", "150X", "350D", "350M", "310T", "310X", "310R", "310V", "350T", "350GK")
 
     override fun score(info: JSONObject): Int {
         var s = 0

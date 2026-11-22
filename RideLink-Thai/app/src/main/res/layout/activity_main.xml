@@ -36,12 +36,25 @@
                 android:textStyle="bold" />
 
             <TextView
+                android:id="@+id/tvAppTagline"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="ระบบส่งหน้าจอ Android Auto ไร้สายสู่จอ TFT มอเตอร์ไซค์"
+                android:text="@string/app_tagline"
                 android:textColor="@color/text_secondary"
                 android:textSize="11sp"
                 android:paddingTop="2dp" />
+
+            <TextView
+                android:id="@+id/tvHeadunitHeaderStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:paddingTop="5dp"
+                android:paddingBottom="5dp"
+                android:text="@string/headunit_header_setup"
+                android:textColor="@color/amber_accent"
+                android:textSize="12sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <LinearLayout
@@ -68,7 +81,7 @@
                 android:id="@+id/tvOnlineBadge"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="● พร้อมทำงาน"
+                android:text="@string/badge_ready"
                 android:textColor="@color/green_neon"
                 android:textSize="10sp"
                 android:paddingTop="4dp" />
@@ -136,7 +149,7 @@
                                 android:id="@+id/tvStatusTitle"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="พร้อมเชื่อมต่อ"
+                                android:text="@string/conn_ready"
                                 android:textColor="@color/text_primary"
                                 android:textSize="16sp"
                                 android:textStyle="bold" />
@@ -147,7 +160,7 @@
                                 android:layout_height="wrap_content"
                                 android:lineSpacingExtra="2dp"
                                 android:paddingTop="2dp"
-                                android:text="กดเมนู QR บนจอรถเพื่อเชื่อมอัตโนมัติ หรือกดเริ่มเชื่อมต่อด้านล่าง"
+                                android:text="@string/connect_instructions"
                                 android:textColor="@color/text_secondary"
                                 android:textSize="11sp" />
                         </LinearLayout>
@@ -159,7 +172,7 @@
                             android:background="@drawable/card_inner_glass"
                             android:src="@drawable/ic_stop_vector"
                             app:tint="@color/ruby_bright"
-                            android:contentDescription="หยุดเชื่อมต่อ" />
+                            android:contentDescription="@string/disconnect" />
                     </LinearLayout>
 
                     <!-- Tap-to-Reveal / Privacy Masked Saved Bike Bar (No Text Overlap, >=52dp Touch Target) -->
@@ -195,7 +208,7 @@
                                 <TextView
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:text="รถที่จำไว้: "
+                                    android:text="@string/saved_bike_label"
                                     android:textColor="@color/text_secondary"
                                     android:textSize="11sp" />
 
@@ -215,13 +228,11 @@
                                 android:id="@+id/tvSavedWifi"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:maxLines="2"
-                                android:ellipsize="end"
                                 android:lineSpacingExtra="2dp"
                                 android:paddingTop="3dp"
-                                android:text="ต่อ BT รถแล้ว — รอกดเมนู QR บนจอรถ"
+                                android:text="@string/auto_wait_qr"
                                 android:textColor="@color/text_muted"
-                                android:textSize="10.5sp" />
+                                android:textSize="12sp" />
                         </LinearLayout>
 
                         <TextView
@@ -233,7 +244,7 @@
                             android:paddingTop="6dp"
                             android:paddingEnd="11dp"
                             android:paddingBottom="6dp"
-                            android:text="กดเพื่อแสดง"
+                            android:text="@string/reveal_details"
                             android:textColor="@color/cyan_neon"
                             android:textSize="10.5sp"
                             android:textStyle="bold" />
@@ -250,7 +261,8 @@
                         <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnStart"
                             android:layout_width="0dp"
-                            android:layout_height="48dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
                             android:layout_weight="1"
                             android:layout_marginEnd="6dp"
                             android:background="@drawable/btn_liquid_emerald"
@@ -261,7 +273,7 @@
                             android:drawablePadding="6dp"
                             android:paddingStart="14dp"
                             android:paddingEnd="14dp"
-                            android:text="เริ่มเชื่อมต่อ"
+                            android:text="@string/connect_start"
                             android:textColor="@color/text_primary"
                             android:textSize="12sp"
                             android:textStyle="bold" />
@@ -269,7 +281,8 @@
                         <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnStop"
                             android:layout_width="0dp"
-                            android:layout_height="48dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
                             android:layout_weight="1"
                             android:layout_marginStart="6dp"
                             android:background="@drawable/btn_liquid_ruby"
@@ -280,7 +293,7 @@
                             android:drawablePadding="6dp"
                             android:paddingStart="14dp"
                             android:paddingEnd="14dp"
-                            android:text="หยุด"
+                            android:text="@string/stop"
                             android:textColor="@color/text_primary"
                             android:textSize="12sp"
                             android:textStyle="bold" />
@@ -297,7 +310,8 @@
                         <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnScanQr"
                             android:layout_width="0dp"
-                            android:layout_height="48dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
                             android:layout_weight="1"
                             android:layout_marginEnd="6dp"
                             android:background="@drawable/btn_liquid_sapphire"
@@ -308,7 +322,7 @@
                             android:drawablePadding="6dp"
                             android:paddingStart="14dp"
                             android:paddingEnd="14dp"
-                            android:text="สแกน QR รถ"
+                            android:text="@string/scan_bike_qr"
                             android:textColor="@color/text_primary"
                             android:textSize="12sp"
                             android:textStyle="bold" />
@@ -316,7 +330,8 @@
                         <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnManualWifi"
                             android:layout_width="0dp"
-                            android:layout_height="48dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
                             android:layout_weight="1"
                             android:layout_marginStart="6dp"
                             android:background="@drawable/btn_liquid_pill"
@@ -327,58 +342,28 @@
                             android:drawablePadding="6dp"
                             android:paddingStart="14dp"
                             android:paddingEnd="14dp"
-                            android:text="ใส่ Wi-Fi เอง"
+                            android:text="@string/manual_wifi"
                             android:textColor="@color/cyan_neon"
                             android:textSize="12sp"
                             android:textStyle="bold" />
                     </LinearLayout>
 
-                    <!-- Button Grid 3: Toggle Preview (50%) & Open Dedicated Stick/Trackpad Cockpit (50%) -->
-                    <LinearLayout
+                    <androidx.appcompat.widget.AppCompatButton
+                        android:id="@+id/btnConnectionIssueReport"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:weightSum="2"
-                        android:layout_marginTop="8dp">
-
-                        <androidx.appcompat.widget.AppCompatButton
-                            android:id="@+id/btnTogglePreview"
-                            android:layout_width="0dp"
-                            android:layout_height="48dp"
-                            android:layout_weight="1"
-                            android:layout_marginEnd="6dp"
-                            android:background="@drawable/btn_liquid_teal"
-                            android:backgroundTint="@null"
-                            android:stateListAnimator="@null"
-                            android:textAllCaps="false"
-                            android:drawableStart="@drawable/ic_eye_vector"
-                            android:drawablePadding="6dp"
-                            android:paddingStart="12dp"
-                            android:paddingEnd="12dp"
-                            android:text="แสดงจอสด"
-                            android:textColor="@color/teal_bright"
-                            android:textSize="11.5sp"
-                            android:textStyle="bold" />
-
-                        <androidx.appcompat.widget.AppCompatButton
-                            android:id="@+id/btnOpenStickCockpit"
-                            android:layout_width="0dp"
-                            android:layout_height="48dp"
-                            android:layout_weight="1"
-                            android:layout_marginStart="6dp"
-                            android:background="@drawable/btn_liquid_pill"
-                            android:backgroundTint="@null"
-                            android:stateListAnimator="@null"
-                            android:textAllCaps="false"
-                            android:drawableStart="@drawable/ic_display_vector"
-                            android:drawablePadding="6dp"
-                            android:paddingStart="12dp"
-                            android:paddingEnd="12dp"
-                            android:text="จอยสติ๊กคุม AA"
-                            android:textColor="@color/emerald_bright"
-                            android:textSize="11.5sp"
-                            android:textStyle="bold" />
-                    </LinearLayout>
+                        android:minHeight="46dp"
+                        android:layout_marginTop="8dp"
+                        android:background="@drawable/btn_liquid_amber"
+                        android:backgroundTint="@null"
+                        android:stateListAnimator="@null"
+                        android:textAllCaps="false"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:text="@string/tft_issue_title"
+                        android:textColor="@color/amber_accent"
+                        android:textSize="11.5sp"
+                        android:textStyle="bold" />
                 </LinearLayout>
 
                 <!-- Card 2: Optional Inline Live Android Auto Viewport (Collapsed by default so Dashboard fits 100% without scroll) -->
@@ -422,7 +407,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginStart="8dp"
-                            android:text="● รอสัญญาณภาพ"
+                            android:text="@string/waiting_video"
                             android:textColor="@color/text_secondary"
                             android:textSize="10.5sp"
                             android:textStyle="bold" />
@@ -459,7 +444,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="พร้อมแสดงภาพสด Android Auto (แตะสั่งงานได้โดยตรง)"
+                                android:text="@string/live_view_ready"
                                 android:textColor="@color/text_secondary"
                                 android:textSize="11sp"
                                 android:gravity="center"
@@ -470,7 +455,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="แตะบนภาพสดเพื่อควบคุมโดยตรง หรือเปิดแท็บ 'จอ AA' เพื่อใช้จอยสติ๊กและทัชแพด"
+                        android:text="@string/live_view_hint"
                         android:textColor="@color/text_muted"
                         android:textSize="11sp"
                         android:lineSpacingExtra="2dp"
@@ -501,24 +486,6 @@
                             android:textColor="@color/text_primary"
                             android:textSize="10.5sp" />
 
-                        <androidx.appcompat.widget.AppCompatButton
-                            android:id="@+id/btnAaMic"
-                            android:layout_width="0dp"
-                            android:layout_height="56dp"
-                            android:layout_weight="1"
-                            android:layout_marginStart="2dp"
-                            android:layout_marginEnd="2dp"
-                            android:background="@drawable/btn_liquid_pill"
-                            android:backgroundTint="@null"
-                            android:stateListAnimator="@null"
-                            android:textAllCaps="false"
-                            android:drawableTop="@drawable/ic_mic_vector"
-                            android:drawablePadding="2dp"
-                            android:paddingTop="6dp"
-                            android:paddingBottom="6dp"
-                            android:text="สั่งเสียง"
-                            android:textColor="@color/cyan_neon"
-                            android:textSize="10.5sp" />
 
                         <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnAaHome"
@@ -535,7 +502,7 @@
                             android:drawablePadding="2dp"
                             android:paddingTop="6dp"
                             android:paddingBottom="6dp"
-                            android:text="หน้าแรก"
+                            android:text="@string/aa_home"
                             android:textColor="@color/text_primary"
                             android:textSize="10.5sp" />
 
@@ -553,7 +520,7 @@
                             android:drawablePadding="2dp"
                             android:paddingTop="6dp"
                             android:paddingBottom="6dp"
-                            android:text="ย้อนกลับ"
+                            android:text="@string/aa_back"
                             android:textColor="@color/text_primary"
                             android:textSize="10.5sp" />
                     </LinearLayout>
@@ -581,7 +548,7 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:layout_marginEnd="8dp"
-                            android:text="ตั้งค่าเฮดยูนิต Android Auto"
+                            android:text="@string/headunit_setup"
                             android:textColor="@color/cyan_neon"
                             android:textSize="13.5sp"
                             android:textStyle="bold" />
@@ -594,7 +561,7 @@
                             android:paddingTop="4dp"
                             android:paddingEnd="9dp"
                             android:paddingBottom="4dp"
-                            android:text="สำคัญ · เปิดเซิร์ฟเวอร์"
+                            android:text="@string/headunit_important"
                             android:textColor="@color/amber_accent"
                             android:textSize="10sp"
                             android:textStyle="bold" />
@@ -619,7 +586,7 @@
                             android:layout_weight="1"
                             android:layout_marginEnd="8dp"
                             android:lineSpacingExtra="2dp"
-                            android:text="⚠ ยังไม่ได้เปิดเฮดยูนิตเซิร์ฟเวอร์ (:5277)"
+                            android:text="@string/headunit_initial"
                             android:textColor="@color/amber_accent"
                             android:textSize="11.5sp"
                             android:textStyle="bold" />
@@ -633,7 +600,7 @@
                             android:paddingTop="6dp"
                             android:paddingEnd="10dp"
                             android:paddingBottom="6dp"
-                            android:text="เช็กสถานะ"
+                            android:text="@string/check_status"
                             android:textColor="@color/cyan_neon"
                             android:textSize="10.5sp"
                             android:textStyle="bold" />
@@ -673,7 +640,7 @@
                                 android:layout_weight="1"
                                 android:layout_marginStart="9dp"
                                 android:lineSpacingExtra="2dp"
-                                android:text="กดปุ่ม 'เปิดหน้าตั้งค่า Android Auto' ด้านล่าง"
+                                android:text="@string/headunit_step_open"
                                 android:textColor="@color/text_primary"
                                 android:textSize="11.5sp" />
                         </LinearLayout>
@@ -701,7 +668,7 @@
                                 android:layout_weight="1"
                                 android:layout_marginStart="9dp"
                                 android:lineSpacingExtra="2dp"
-                                android:text="เลื่อนลงล่างสุด แตะคำว่า 'เวอร์ชัน' (Version) รัวๆ 10 ครั้ง"
+                                android:text="@string/headunit_step_version"
                                 android:textColor="@color/text_primary"
                                 android:textSize="11.5sp" />
                         </LinearLayout>
@@ -728,7 +695,7 @@
                                 android:layout_weight="1"
                                 android:layout_marginStart="9dp"
                                 android:lineSpacingExtra="2dp"
-                                android:text="แตะเมนู 3 จุด (ขวาบน) → เลือก 'เริ่มเฮดยูนิตเซิร์ฟเวอร์' แล้วกลับมาแอปนี้"
+                                android:text="@string/headunit_step_start"
                                 android:textColor="@color/text_primary"
                                 android:textSize="11.5sp" />
                         </LinearLayout>
@@ -737,7 +704,8 @@
                     <androidx.appcompat.widget.AppCompatButton
                         android:id="@+id/btnOpenAaSettings"
                         android:layout_width="match_parent"
-                        android:layout_height="48dp"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
                         android:background="@drawable/btn_liquid_sapphire"
                         android:backgroundTint="@null"
                         android:stateListAnimator="@null"
@@ -746,7 +714,7 @@
                         android:drawablePadding="10dp"
                         android:paddingStart="18dp"
                         android:paddingEnd="18dp"
-                        android:text="เปิดหน้าตั้งค่า ANDROID AUTO บนมือถือ"
+                        android:text="@string/aa_settings_open"
                         android:textColor="@color/text_primary"
                         android:textSize="12sp"
                         android:textStyle="bold" />
@@ -783,7 +751,7 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:layout_marginEnd="8dp"
-                            android:text="หน้าจอสัมผัสสด (Full AA View)"
+                            android:text="@string/full_live_view"
                             android:textColor="@color/text_primary"
                             android:textSize="14sp"
                             android:textStyle="bold" />
@@ -792,7 +760,7 @@
                             android:id="@+id/tvFullLiveFpsBadge"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="● รอสัญญาณภาพ"
+                            android:text="@string/waiting_video"
                             android:textColor="@color/text_secondary"
                             android:textSize="10.5sp"
                             android:textStyle="bold" />
@@ -828,7 +796,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="ยังไม่มีภาพสตรีมสด — กดเริ่มเชื่อมต่อเพื่อเริ่มใช้งาน"
+                                android:text="@string/full_live_waiting"
                                 android:textColor="@color/text_secondary"
                                 android:textSize="11.5sp"
                                 android:gravity="center"
@@ -844,7 +812,7 @@
                                 android:stateListAnimator="@null"
                                 android:paddingStart="16dp"
                                 android:paddingEnd="16dp"
-                                android:text="เริ่มเชื่อมต่อ Android Auto"
+                                android:text="@string/full_live_start"
                                 android:textColor="@color/text_primary"
                                 android:textSize="12sp"
                                 android:textStyle="bold" />
@@ -865,7 +833,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="ชุดควบคุม AA สำหรับจอ Zontes (จอยสติ๊ก / ปุ่มหมุน / ทัชแพด)"
+                        android:text="@string/aa_controls_title"
                         android:textColor="@color/cyan_neon"
                         android:textSize="12.5sp"
                         android:textStyle="bold" />
@@ -882,14 +850,15 @@
                         <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnModeJoystick"
                             android:layout_width="0dp"
-                            android:layout_height="48dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
                             android:layout_weight="1"
                             android:layout_marginEnd="5dp"
                             android:background="@drawable/btn_liquid_sapphire"
                             android:backgroundTint="@null"
                             android:stateListAnimator="@null"
                             android:textAllCaps="false"
-                            android:text="จอยสติ๊ก + ปุ่มหมุน"
+                            android:text="@string/joystick_dial"
                             android:textColor="@color/text_primary"
                             android:textSize="12sp"
                             android:textStyle="bold" />
@@ -897,14 +866,15 @@
                         <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnModeTrackpad"
                             android:layout_width="0dp"
-                            android:layout_height="48dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
                             android:layout_weight="1"
                             android:layout_marginStart="5dp"
                             android:background="@drawable/btn_liquid_pill"
                             android:backgroundTint="@null"
                             android:stateListAnimator="@null"
                             android:textAllCaps="false"
-                            android:text="ทัชแพดลากนิ้ว"
+                            android:text="@string/trackpad"
                             android:textColor="@color/text_secondary"
                             android:textSize="12sp"
                             android:textStyle="bold" />
@@ -941,7 +911,7 @@
                                 android:backgroundTint="@null"
                                 android:stateListAnimator="@null"
                                 android:textAllCaps="false"
-                                android:text="◀ หมุนโฟกัสซ้าย"
+                                android:text="@string/focus_previous"
                                 android:textColor="@color/cyan_neon"
                                 android:textSize="11.5sp"
                                 android:textStyle="bold" />
@@ -955,7 +925,7 @@
                                 android:backgroundTint="@null"
                                 android:stateListAnimator="@null"
                                 android:textAllCaps="false"
-                                android:text="กดเลือก / ตกลง"
+                                android:text="@string/focus_confirm"
                                 android:textColor="@color/text_primary"
                                 android:textSize="12sp"
                                 android:textStyle="bold" />
@@ -968,7 +938,7 @@
                                 android:backgroundTint="@null"
                                 android:stateListAnimator="@null"
                                 android:textAllCaps="false"
-                                android:text="หมุนโฟกัสขวา ▶"
+                                android:text="@string/focus_next"
                                 android:textColor="@color/cyan_neon"
                                 android:textSize="11.5sp"
                                 android:textStyle="bold" />
@@ -995,7 +965,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="ลากนิ้วเพื่อเลื่อน/ปัดแผนที่และหน้าจอ AA"
+                                android:text="@string/trackpad_swipe"
                                 android:textColor="@color/text_secondary"
                                 android:textSize="12sp"
                                 android:textStyle="bold" />
@@ -1003,7 +973,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="แตะ 1 ครั้งตรงจุดที่ต้องการเพื่อกดเลือกทันที"
+                                android:text="@string/trackpad_tap"
                                 android:textColor="@color/text_muted"
                                 android:textSize="11sp"
                                 android:paddingTop="4dp" />
@@ -1042,6 +1012,7 @@
                             android:textColor="@color/text_primary"
                             android:textSize="10.5sp" />
 
+
                         <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnFullAaMic"
                             android:layout_width="0dp"
@@ -1057,7 +1028,7 @@
                             android:drawablePadding="2dp"
                             android:paddingTop="6dp"
                             android:paddingBottom="6dp"
-                            android:text="สั่งเสียง"
+                            android:text="@string/aa_voice"
                             android:textColor="@color/cyan_neon"
                             android:textSize="10.5sp" />
 
@@ -1076,7 +1047,7 @@
                             android:drawablePadding="2dp"
                             android:paddingTop="6dp"
                             android:paddingBottom="6dp"
-                            android:text="หน้าแรก"
+                            android:text="@string/aa_home"
                             android:textColor="@color/text_primary"
                             android:textSize="10.5sp" />
 
@@ -1094,7 +1065,7 @@
                             android:drawablePadding="2dp"
                             android:paddingTop="6dp"
                             android:paddingBottom="6dp"
-                            android:text="ย้อนกลับ"
+                            android:text="@string/aa_back"
                             android:textColor="@color/text_primary"
                             android:textSize="10.5sp" />
                     </LinearLayout>
@@ -1109,6 +1080,24 @@
                 android:orientation="vertical"
                 android:visibility="gone">
 
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:accessibilityHeading="true"
+                    android:text="@string/tft_tab_title"
+                    android:textColor="@color/text_primary"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="12dp"
+                    android:text="@string/tft_studio_scope"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -1118,10 +1107,80 @@
                     android:layout_marginBottom="14dp">
 
                     <TextView
-                        android:id="@+id/tvTftTitle"
+                        android:id="@+id/tvTftSyncStatus"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="ข้อมูลสตรีมหน้าปัดมอเตอร์ไซค์ TFT (Zontes / CFMoto)"
+                        android:accessibilityLiveRegion="polite"
+                        android:textColor="@color/text_primary"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tvTftSyncHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="14sp" />
+
+                </LinearLayout>
+
+                <androidx.appcompat.widget.AppCompatButton
+                    android:id="@+id/btnTftToggleStudio"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="8dp"
+                    android:background="@drawable/btn_liquid_amber"
+                    android:backgroundTint="@null"
+                    android:minHeight="48dp"
+                    android:text="@string/tft_close_studio"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:visibility="gone" />
+
+                <FrameLayout
+                    android:id="@+id/tftStudioContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:visibility="gone" />
+
+
+                <androidx.appcompat.widget.AppCompatButton
+                    android:id="@+id/btnTftToggleDetails"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/btn_liquid_sapphire"
+                    android:backgroundTint="@null"
+                    android:minHeight="48dp"
+                    android:text="@string/tft_open_details"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary" />
+
+                <androidx.appcompat.widget.AppCompatButton
+                    android:id="@+id/btnTftDiagnosticLog"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/btn_liquid_pill"
+                    android:backgroundTint="@null"
+                    android:minHeight="48dp"
+                    android:text="@string/tft_issue_title"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary" />
+
+                <LinearLayout
+                    android:id="@+id/tftDetailsContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/card_liquid_glass"
+                    android:orientation="vertical"
+                    android:padding="16dp"
+                    android:layout_marginBottom="14dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/tft_stream_info"
                         android:textColor="@color/text_primary"
                         android:textSize="14sp"
                         android:textStyle="bold" />
@@ -1142,9 +1201,9 @@
                         android:background="@drawable/card_inner_glass"
                         android:lineSpacingExtra="5dp"
                         android:padding="14dp"
-                        android:text="สถานะ: พร้อมส่งภาพ H.264 ไปยังจอรถ"
                         android:textColor="@color/cyan_neon"
                         android:textSize="11.5sp" />
+
                 </LinearLayout>
             </LinearLayout>
 
@@ -1156,57 +1215,29 @@
                 android:orientation="vertical"
                 android:visibility="gone">
 
-                <!-- Card 0: Bluetooth + QR Menu Auto-Connect -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginBottom="14dp"
                     android:background="@drawable/card_liquid_glass"
-                    android:orientation="vertical"
-                    android:padding="16dp"
-                    android:layout_marginBottom="14dp">
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="16dp">
 
                     <TextView
-                        android:layout_width="match_parent"
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:text="ระบบเชื่อมต่ออัตโนมัติ (BT + หน้าเมนู QR บนรถ)"
+                        android:layout_weight="1"
+                        android:text="@string/app_language_title"
                         android:textColor="@color/text_primary"
-                        android:textSize="14sp"
-                        android:textStyle="bold" />
+                        android:textSize="16sp" />
 
-                    <TextView
-                        android:layout_width="match_parent"
+                    <Button
+                        android:id="@+id/btnAppLanguage"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="เมื่อมือถือเกาะ Bluetooth รถ แอปจะเฝ้ารอและเริ่มทำงานเองทันทีที่คุณกดปุ่ม SET ค้างจนขึ้นหน้า QR บนจอรถ (ไม่เปิด AA มั่วขณะขี่ปกติ)"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="11sp"
-                        android:lineSpacingExtra="3dp"
-                        android:paddingTop="4dp"
-                        android:paddingBottom="10dp" />
-
-                    <TextView
-                        android:id="@+id/tvAutoConnectState"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:background="@drawable/card_inner_glass"
-                        android:lineSpacingExtra="2dp"
-                        android:padding="11dp"
-                        android:layout_marginBottom="10dp"
-                        android:text="สถานะ: สแตนด์บายรอสัญญาณ Bluetooth และหน้าเมนู QR ของรถ"
-                        android:textColor="@color/cyan_neon"
-                        android:textSize="11sp" />
-
-                    <androidx.appcompat.widget.AppCompatButton
-                        android:id="@+id/btnToggleAutoConnect"
-                        android:layout_width="match_parent"
-                        android:layout_height="48dp"
-                        android:background="@drawable/btn_liquid_emerald"
-                        android:backgroundTint="@null"
-                        android:stateListAnimator="@null"
-                        android:textAllCaps="false"
-                        android:text="เปิดเชื่อมต่ออัตโนมัติอยู่ (แตะเพื่อปิด)"
-                        android:textColor="@color/text_primary"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
+                        android:minHeight="48dp"
+                        android:text="@string/app_language_toggle" />
                 </LinearLayout>
 
                 <!-- Card 1: Manual Resolution, DPI Zoom & Zontes Template Safe-Area Calibration -->
@@ -1221,7 +1252,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="ปรับความละเอียด ย่อ/ขยาย และหลบกรอบจอ Zontes"
+                        android:text="@string/calibration_title"
                         android:textColor="@color/cyan_neon"
                         android:textSize="14sp"
                         android:textStyle="bold" />
@@ -1229,7 +1260,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="ปรับขนาดภาพและขอบทั้ง 4 ด้านแบบสดๆ เพื่อไม่ให้ Template หน้าจอ Zontes บังแผนที่หรือแถบเมนู"
+                        android:text="@string/calibration_description"
                         android:textColor="@color/text_secondary"
                         android:textSize="11sp"
                         android:lineSpacingExtra="2dp"
@@ -1240,7 +1271,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="1. ความละเอียดสัญญาณภาพ AA (มีผลรอบถัดไป)"
+                        android:text="@string/calibration_resolution"
                         android:textColor="@color/text_primary"
                         android:textSize="12sp"
                         android:textStyle="bold" />
@@ -1263,7 +1294,7 @@
                             android:checked="true"
                             android:paddingTop="4dp"
                             android:paddingBottom="4dp"
-                            android:text="อัตโนมัติ"
+                            android:text="@string/automatic"
                             android:textColor="@color/text_primary"
                             android:textSize="11sp" />
 
@@ -1296,7 +1327,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="2. ขนาดไอคอนและแถบเมนู AA (ลดค่า DPI เพื่อย่อไอคอน)"
+                        android:text="@string/calibration_dpi"
                         android:textColor="@color/text_primary"
                         android:textSize="12sp"
                         android:textStyle="bold" />
@@ -1332,9 +1363,7 @@
                             android:gravity="center"
                             android:paddingStart="6dp"
                             android:paddingEnd="6dp"
-                            android:singleLine="true"
-                            android:ellipsize="end"
-                            android:text="แนะนำ (135 DPI)"
+                            android:text="@string/dpi_initial"
                             android:textColor="@color/text_primary"
                             android:textSize="11.5sp"
                             android:textStyle="bold" />
@@ -1362,7 +1391,7 @@
                             android:backgroundTint="@null"
                             android:stateListAnimator="@null"
                             android:textAllCaps="false"
-                            android:text="รีเซ็ต"
+                            android:text="@string/reset"
                             android:textColor="@color/teal_bright"
                             android:textSize="11sp"
                             android:textStyle="bold" />
@@ -1372,7 +1401,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="3. ย่อ/ขยายขนาดภาพรวมแบบสด (Live Scale 70% - 100%)"
+                        android:text="@string/calibration_scale"
                         android:textColor="@color/text_primary"
                         android:textSize="12sp"
                         android:textStyle="bold" />
@@ -1406,7 +1435,7 @@
                             android:layout_marginEnd="8dp"
                             android:background="@drawable/card_inner_glass"
                             android:gravity="center"
-                            android:text="100% (เต็มสัดส่วน)"
+                            android:text="@string/scale_full"
                             android:textColor="@color/emerald_bright"
                             android:textSize="12sp"
                             android:textStyle="bold" />
@@ -1428,7 +1457,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="4. ขยับขอบภาพ 4 ด้านหลบ Template จอรถ (ปรับสดทันที)"
+                        android:text="@string/calibration_margins"
                         android:textColor="@color/text_primary"
                         android:textSize="12sp"
                         android:textStyle="bold"
@@ -1457,7 +1486,7 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:gravity="center"
-                                android:text="ขอบบน: 0 px"
+                                android:text="@string/margin_top_initial"
                                 android:textColor="@color/text_primary"
                                 android:textSize="11.5sp"
                                 android:textStyle="bold"
@@ -1514,7 +1543,7 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:gravity="center"
-                                android:text="ขอบล่าง: 0 px"
+                                android:text="@string/margin_bottom_initial"
                                 android:textColor="@color/text_primary"
                                 android:textSize="11.5sp"
                                 android:textStyle="bold"
@@ -1580,7 +1609,7 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:gravity="center"
-                                android:text="ขอบซ้าย: 0 px"
+                                android:text="@string/margin_left_initial"
                                 android:textColor="@color/text_primary"
                                 android:textSize="11.5sp"
                                 android:textStyle="bold"
@@ -1637,7 +1666,7 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:gravity="center"
-                                android:text="ขอบขวา: 0 px"
+                                android:text="@string/margin_right_initial"
                                 android:textColor="@color/text_primary"
                                 android:textSize="11.5sp"
                                 android:textStyle="bold"
@@ -1690,14 +1719,15 @@
                         <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnPresetZontesSafe"
                             android:layout_width="0dp"
-                            android:layout_height="48dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
                             android:layout_weight="1"
                             android:layout_marginEnd="4dp"
                             android:background="@drawable/btn_liquid_sapphire"
                             android:backgroundTint="@null"
                             android:stateListAnimator="@null"
                             android:textAllCaps="false"
-                            android:text="หลบกรอบ Zontes"
+                            android:text="@string/preset_zontes"
                             android:textColor="@color/text_primary"
                             android:textSize="10.5sp"
                             android:textStyle="bold" />
@@ -1705,7 +1735,8 @@
                         <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnPresetDeepSafe"
                             android:layout_width="0dp"
-                            android:layout_height="48dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
                             android:layout_weight="1"
                             android:layout_marginStart="2dp"
                             android:layout_marginEnd="2dp"
@@ -1713,7 +1744,7 @@
                             android:backgroundTint="@null"
                             android:stateListAnimator="@null"
                             android:textAllCaps="false"
-                            android:text="หลบกรอบลึก"
+                            android:text="@string/preset_deep"
                             android:textColor="@color/cyan_neon"
                             android:textSize="10.5sp"
                             android:textStyle="bold" />
@@ -1721,14 +1752,15 @@
                         <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnPresetFullReset"
                             android:layout_width="0dp"
-                            android:layout_height="48dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
                             android:layout_weight="1"
                             android:layout_marginStart="4dp"
                             android:background="@drawable/btn_liquid_teal"
                             android:backgroundTint="@null"
                             android:stateListAnimator="@null"
                             android:textAllCaps="false"
-                            android:text="เต็มจอ 100%"
+                            android:text="@string/preset_full"
                             android:textColor="@color/teal_bright"
                             android:textSize="10.5sp"
                             android:textStyle="bold" />
@@ -1740,7 +1772,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="16dp"
                         android:layout_marginBottom="4dp"
-                        android:text="🎯 ปรับชดเชยจุดสัมผัสแนวตั้ง (Touch Y-Offset)"
+                        android:text="@string/touch_offset_title"
                         android:textColor="@color/text_primary"
                         android:textSize="13sp"
                         android:textStyle="bold" />
@@ -1749,7 +1781,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginBottom="8dp"
-                        android:text="ขยับจุดรับสัมผัสขึ้น/ลง เพื่อให้ตรงตำแหน่งที่นิ้วแตะบนหน้าจอจริง"
+                        android:text="@string/touch_offset_description"
                         android:textColor="@color/text_secondary"
                         android:textSize="11.5sp" />
 
@@ -1767,7 +1799,7 @@
                             android:background="@drawable/btn_liquid_pill"
                             android:backgroundTint="@null"
                             android:stateListAnimator="@null"
-                            android:text="▲ ขึ้น"
+                            android:text="@string/touch_up"
                             android:textColor="@color/cyan_neon"
                             android:textSize="13sp"
                             android:textStyle="bold" />
@@ -1781,7 +1813,7 @@
                             android:layout_marginEnd="6dp"
                             android:background="@drawable/card_inner_glass"
                             android:gravity="center"
-                            android:text="-24 px (ชดเชยขึ้น)"
+                            android:text="@string/touch_initial"
                             android:textColor="@color/cyan_neon"
                             android:textSize="13sp"
                             android:textStyle="bold" />
@@ -1793,7 +1825,7 @@
                             android:background="@drawable/btn_liquid_pill"
                             android:backgroundTint="@null"
                             android:stateListAnimator="@null"
-                            android:text="▼ ลง"
+                            android:text="@string/touch_down"
                             android:textColor="@color/cyan_neon"
                             android:textSize="13sp"
                             android:textStyle="bold" />
@@ -1802,11 +1834,12 @@
                     <androidx.appcompat.widget.AppCompatButton
                         android:id="@+id/btnTouchYReset"
                         android:layout_width="match_parent"
-                        android:layout_height="42dp"
+                        android:layout_height="wrap_content"
+                        android:minHeight="42dp"
                         android:background="@drawable/btn_liquid_pill"
                         android:backgroundTint="@null"
                         android:stateListAnimator="@null"
-                        android:text="รีเซ็ตค่ามาตรฐาน (-24px)"
+                        android:text="@string/touch_reset"
                         android:textColor="@color/text_secondary"
                         android:textSize="11.5sp"
                         android:textStyle="bold" />
@@ -1824,7 +1857,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="เลือกรุ่นรถและโปรไฟล์หน้าจอ (Bike Profile)"
+                        android:text="@string/bike_profile_title"
                         android:textColor="@color/text_primary"
                         android:textSize="14sp"
                         android:textStyle="bold" />
@@ -1832,7 +1865,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="เลือกโปรไฟล์ที่ตรงกับหน้าปัดรถของคุณ เพื่อให้สัดส่วนและ DPI พอดีจอ"
+                        android:text="@string/bike_profile_description"
                         android:textColor="@color/text_secondary"
                         android:textSize="11sp"
                         android:paddingTop="3dp"
@@ -1853,7 +1886,7 @@
                             android:paddingBottom="6dp"
                             android:lineSpacingExtra="2dp"
                             android:checked="true"
-                            android:text="ตรวจจับอัตโนมัติจากหน้าจอรถ (Auto Detect)"
+                            android:text="@string/bike_profile_auto"
                             android:textColor="@color/text_primary"
                             android:textSize="12sp" />
 
@@ -1865,7 +1898,7 @@
                             android:paddingTop="6dp"
                             android:paddingBottom="6dp"
                             android:lineSpacingExtra="2dp"
-                            android:text="Zontes จอ 5 นิ้ว (150X / 350D / 310 · 800×480 @ 135 DPI)"
+                            android:text="@string/bike_profile_zontes"
                             android:textColor="@color/cyan_neon"
                             android:textSize="12sp"
                             android:textStyle="bold" />
@@ -1878,7 +1911,7 @@
                             android:paddingTop="6dp"
                             android:paddingBottom="6dp"
                             android:lineSpacingExtra="2dp"
-                            android:text="Zontes จอใหญ่ 6.75-7 นิ้ว (368G / 368E / 350E / 703F · HD)"
+                            android:text="@string/bike_profile_zontes_hd"
                             android:textColor="@color/amber_accent"
                             android:textSize="12sp"
                             android:textStyle="bold" />
@@ -1891,7 +1924,7 @@
                             android:paddingTop="6dp"
                             android:paddingBottom="6dp"
                             android:lineSpacingExtra="2dp"
-                            android:text="CFMoto 450MT / 800MT / 450SR (จอนอน)"
+                            android:text="@string/bike_profile_cfmoto_land"
                             android:textColor="@color/text_primary"
                             android:textSize="12sp" />
 
@@ -1903,7 +1936,7 @@
                             android:paddingTop="6dp"
                             android:paddingBottom="6dp"
                             android:lineSpacingExtra="2dp"
-                            android:text="CFMoto 1000 MT-X (จอตั้ง 720×1280)"
+                            android:text="@string/bike_profile_cfmoto_port"
                             android:textColor="@color/text_primary"
                             android:textSize="12sp" />
                     </RadioGroup>
@@ -1921,7 +1954,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="สัดส่วนการวางภาพบนจอรถ (Screen Fit Mode)"
+                        android:text="@string/screen_fit_title"
                         android:textColor="@color/text_primary"
                         android:textSize="14sp"
                         android:textStyle="bold" />
@@ -1943,7 +1976,7 @@
                             android:paddingTop="4dp"
                             android:paddingBottom="4dp"
                             android:checked="true"
-                            android:text="เต็มจอ"
+                            android:text="@string/screen_fit_fill"
                             android:textColor="@color/text_primary"
                             android:textSize="11.5sp" />
 
@@ -1955,7 +1988,7 @@
                             android:layout_weight="1"
                             android:paddingTop="4dp"
                             android:paddingBottom="4dp"
-                            android:text="พอดีจอ"
+                            android:text="@string/screen_fit_contain"
                             android:textColor="@color/text_primary"
                             android:textSize="11.5sp" />
 
@@ -1967,7 +2000,7 @@
                             android:layout_weight="1"
                             android:paddingTop="4dp"
                             android:paddingBottom="4dp"
-                            android:text="ยืดภาพ"
+                            android:text="@string/screen_fit_stretch"
                             android:textColor="@color/text_primary"
                             android:textSize="11.5sp" />
                     </RadioGroup>
@@ -1995,7 +2028,7 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:layout_marginEnd="8dp"
-                            android:text="สเปกหน้าจอ Zontes ทุกรุ่นในไทย"
+                            android:text="@string/zontes_specs_title"
                             android:textColor="@color/cyan_neon"
                             android:textSize="13sp"
                             android:textStyle="bold" />
@@ -2020,7 +2053,7 @@
                         android:background="@drawable/card_inner_glass"
                         android:padding="12dp"
                         android:lineSpacingExtra="4dp"
-                        android:text="• กลุ่มจอ 5 นิ้ว (800×480 WVGA): 150X, 350D, 350M, 310T/X/R/V, 350T/GK -> ค่าแนะนำ 800×480 @ 135 DPI (ไอคอนครบ 3 แถว ไม่ชนแถบเมนูล่าง)\n\n• กลุ่มจอ 6.75 - 7 นิ้ว HD (1280×720): 368G, 368E, 368D, 368K, 350E, 703F, 703RR -> ค่าแนะนำ 1280×720 @ 160 DPI"
+                        android:text="@string/zontes_specs_description"
                         android:textColor="@color/text_primary"
                         android:textSize="11sp" />
                 </LinearLayout>
@@ -2028,6 +2061,52 @@
 
         </LinearLayout>
     </dev.zanderp.opencfmoto.FastScrollView>
+
+    <!-- TFT theme action stays above the dock while the preview scrolls. -->
+    <LinearLayout
+        android:id="@+id/tftSyncActionBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_above="@id/bottomDockContainer"
+        android:background="@color/bg_deep_dark"
+        android:orientation="vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone">
+
+        <androidx.appcompat.widget.AppCompatButton
+            android:id="@+id/btnTftChangeDashboard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/btn_liquid_emerald"
+            android:backgroundTint="@null"
+            android:minHeight="48dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:text="@string/tft_change_dashboard"
+            android:textAllCaps="false"
+            android:textColor="@color/text_primary"
+            android:textStyle="bold" />
+
+        <androidx.appcompat.widget.AppCompatButton
+            android:id="@+id/btnTftSyncStop"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/btn_liquid_ruby"
+            android:backgroundTint="@null"
+            android:drawablePadding="8dp"
+            android:drawableStart="@drawable/ic_stop_vector"
+            android:minHeight="48dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:text="@string/tft_sync_stop"
+            android:textAllCaps="false"
+            android:textColor="@color/text_primary"
+            android:textStyle="bold"
+            android:visibility="gone" />
+    </LinearLayout>
 
     <!-- Bottom Floating Capsule Dock (4 Symmetrical Tabs, 64dp Height, >=48dp Touch Targets) -->
     <LinearLayout
@@ -2065,7 +2144,7 @@
                 android:id="@+id/tvTabDashText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="แดชบอร์ด"
+                android:text="@string/tab_dashboard"
                 android:textColor="@color/text_primary"
                 android:textSize="10sp"
                 android:textStyle="bold" />
@@ -2090,7 +2169,7 @@
                 android:id="@+id/tvTabScreenText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="จอ AA"
+                android:text="@string/tab_screen"
                 android:textColor="@color/text_secondary"
                 android:textSize="10sp" />
         </LinearLayout>
@@ -2114,7 +2193,7 @@
                 android:id="@+id/tvTabTftText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="จอรถ TFT"
+                android:text="@string/tab_tft"
                 android:textColor="@color/text_secondary"
                 android:textSize="10sp" />
         </LinearLayout>
@@ -2138,7 +2217,7 @@
                 android:id="@+id/tvTabSettingsText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="ตั้งค่า"
+                android:text="@string/tab_settings"
                 android:textColor="@color/text_secondary"
                 android:textSize="10sp" />
         </LinearLayout>

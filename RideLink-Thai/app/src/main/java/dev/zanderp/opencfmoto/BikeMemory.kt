@@ -72,8 +72,6 @@ object BikeMemory {
         }
         writeList(ctx, list)
         prefs(ctx).edit().putString(KEY_SELECTED, raw).apply()
-        // Ensure bike SSID is approved for hardware-level passive Wi-Fi watching on BT connect
-        BikeAutoWatcher.markSsidApproved(ctx, qr.ssid)
     }
 
     fun select(ctx: Context, raw: String) {

@@ -101,6 +101,49 @@ class HeadunitCoordinatorHarnessTest {
     }
 
     @Test
+    fun `startup waits for the head unit instead of using self mode`() {
+        val first = input(consecutiveRefusals = 1, msSinceLastDial = 10L)
+            .copy(allowSelfModeFallback = false)
+        assertEquals(AaConnectAction.WAIT_SETTLE_COOLDOWN, ProjectionHarness.evaluateAaConnectStep(first).action)
+        val unavailable = first.copy(consecutiveRefusals = ProjectionHarness.REFUSALS_BEFORE_GUIDANCE)
+        assertEquals(R.string.headunit_refused, ProjectionHarness.evaluateAaConnectStep(unavailable).reasonRes)
+    }
+
+    @Test
+    fun `header distinguishes instructions and actual head unit status`() {
+        fun status(setup: Boolean, running: Boolean, live: Boolean, link: HeadunitLinkStatus, aa: Boolean = live) =
+            ProjectionHarness.evaluateHeadunitHeader(setup, running, live, aa, link).textRes
+
+        assertEquals(R.string.headunit_header_setup, status(false, false, false, HeadunitLinkStatus.UNKNOWN))
+        assertEquals(R.string.headunit_header_checking, status(false, true, false, HeadunitLinkStatus.UNKNOWN))
+        assertEquals(R.string.headunit_header_off, status(false, true, false, HeadunitLinkStatus.REFUSED))
+        assertEquals(R.string.headunit_header_ready, status(false, true, true, HeadunitLinkStatus.CONNECTED))
+        assertEquals(R.string.headunit_header_unverified, status(true, false, false, HeadunitLinkStatus.CONNECTED))
+        assertEquals(R.string.headunit_header_checking, status(true, true, false, HeadunitLinkStatus.UNKNOWN))
+        assertEquals(R.string.headunit_header_off, status(true, true, false, HeadunitLinkStatus.REFUSED))
+        assertEquals(R.string.headunit_header_failed, status(true, true, false, HeadunitLinkStatus.HANDSHAKE_FAILED))
+        assertEquals(R.string.headunit_header_ready, status(true, true, true, HeadunitLinkStatus.CONNECTED))
+        assertEquals(R.string.headunit_header_fallback, status(true, true, false, HeadunitLinkStatus.REFUSED, aa = true))
+    }
+
+    @Test
+    fun `standby is ready only after the live head unit handshake`() {
+        fun standbyStatus(live: Boolean, link: HeadunitLinkStatus) = ProjectionHarness.evaluateHeadunitHeader(
+            setupComplete = true,
+            sessionRunning = true,
+            headunitLive = live,
+            androidAutoLive = live,
+            headunit = link,
+            projectionRequested = false,
+        ).textRes
+
+        assertEquals(R.string.headunit_header_checking, standbyStatus(false, HeadunitLinkStatus.UNKNOWN))
+        assertEquals(R.string.headunit_header_off, standbyStatus(false, HeadunitLinkStatus.REFUSED))
+        assertEquals(R.string.headunit_header_standby, standbyStatus(true, HeadunitLinkStatus.CONNECTED))
+        assertEquals(R.string.headunit_header_checking, standbyStatus(false, HeadunitLinkStatus.CONNECTED))
+    }
+
+    @Test
     fun `failed handshake does NOT kill the dial loop - it backs off then redials`() {
         val backoff = ProjectionHarness.evaluateAaConnectStep(
             input(consecutiveHandshakeFailures = 1, msSinceLastDial = 100L, msSinceLastTeardown = 5_000L)
@@ -113,7 +156,7 @@ class HeadunitCoordinatorHarnessTest {
     }
 
     @Test
-    fun `repeated handshake failures surface Thai guidance for a wedged head unit server`() {
+    fun `repeated handshake failures select guidance for a wedged head unit server`() {
         val j = ProjectionHarness.evaluateAaConnectStep(
             input(
                 consecutiveHandshakeFailures = ProjectionHarness.HANDSHAKE_FAILURES_BEFORE_GUIDANCE,
@@ -121,7 +164,7 @@ class HeadunitCoordinatorHarnessTest {
             )
         )
         assertEquals(AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED, j.action)
-        assertTrue(j.reasonTh.contains(":5277"))
+        assertEquals(R.string.headunit_wedged, j.reasonRes)
         // once surfaced, the coordinator keeps redialling instead of surfacing forever
         val next = ProjectionHarness.evaluateAaConnectStep(
             input(
@@ -165,7 +208,7 @@ class HeadunitCoordinatorHarnessTest {
             headunit = HeadunitLinkStatus.REFUSED,
         )
         assertEquals(UiLevel.WARN, refused.level)
-        assertTrue(refused.text.contains(":5277"))
+        assertEquals(R.string.headunit_refused_badge, refused.textRes)
         val wedged = ProjectionHarness.evaluateServerStatusUi(
             sessionRunning = true, handshakeLive = false, decoding = false, fps = 0,
             headunit = HeadunitLinkStatus.HANDSHAKE_FAILED,

@@ -19,6 +19,7 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 /**
@@ -34,6 +35,7 @@ import kotlin.concurrent.thread
  */
 class EasyConnProber(
     private val context: Context,
+    private val publishProjectionState: (() -> Unit) -> Unit = { it() },
     private val log: (String) -> Unit,
 ) {
     companion object {
@@ -74,6 +76,7 @@ class EasyConnProber(
         // Heartbeat BOTH :10922 channel sockets — CAR_DATA carries 0x104a0/CHECK_SN and was
         // previously left idle, which is what triggered the ~7s 800NK flap.
         it.onPxcChannelSelected = { sock, label -> startCtrlHeartbeat(sock, label) }
+        it.onClientInfoReceived = { sock -> probeTftReadOnlyPorts(sock) }
     }
     private val servers = ArrayList<ServerSocket>()
     private var multicastLock: WifiManager.MulticastLock? = null
@@ -82,6 +85,7 @@ class EasyConnProber(
     private val ctrlHeartbeatThreads =
         java.util.Collections.synchronizedList(ArrayList<Thread>())
     @Volatile private var running = false
+    private val videoConfigLock = java.util.concurrent.locks.ReentrantLock()
     @Volatile private var probed = false
     @Volatile private var video: VideoPipeline? = null
     @Volatile private var ownsVideo = false
@@ -122,6 +126,25 @@ class EasyConnProber(
     @Volatile private var everConnected = false
     @Volatile private var reprobing = false
     @Volatile private var reconnectAttempts = 0
+    private val tftPortsProbed = AtomicBoolean(false)
+
+    /** One connection-only check per demo session; no login, payload, or remote commands. */
+    private fun probeTftReadOnlyPorts(peerSocket: Socket) {
+        if (!BuildConfig.APPLICATION_ID.endsWith(".demo") || handshake.profile !== ZontesProfile) return
+        if (!tftPortsProbed.compareAndSet(false, true)) return
+        val peer = peerSocket.inetAddress
+        val bikeNetwork = network
+        thread(name = "tft-readonly-probe", isDaemon = true) {
+            for (port in listOf(23, 5555)) {
+                val result = when {
+                    !running -> TftPortProbe.Result.CANCELLED
+                    bikeNetwork == null -> TftPortProbe.Result.NO_BIKE_NETWORK
+                    else -> TftPortProbe.probe(peer, port) { bikeNetwork.socketFactory.createSocket() }
+                }
+                TftDiagnostics.recordPortProbe(port, result)
+            }
+        }
+    }
 
     /**
      * @param gatewayOverride when set (Wi‑Fi Direct P2P path), use this bike GO IP instead of
@@ -144,6 +167,8 @@ class EasyConnProber(
         lastFrameAt = 0L
         everConnected = false
         reconnectAttempts = 0
+        tftPortsProbed.set(false)
+        handshake.resetProtocolEvidence()
         liveConns.set(0)
         this.network = network
         dumpEnvironment(network)
@@ -180,7 +205,7 @@ class EasyConnProber(
             if (BikeWifi.isVpnBindBlocked(context, bindErr)) {
                 log("!! VPN kill-switch is blocking bike Wi-Fi (EPERM on Network.bindSocket). " +
                     "Disable Always-on VPN → 'Block connections without VPN', allow LAN, or turn the VPN off.")
-                ConnectionState.set(Phase.ERROR, "VPN kill-switch blocking bike Wi‑Fi")
+                publishProjectionState { ConnectionState.set(Phase.ERROR, R.string.conn_detail_vpn) }
                 stop()
                 return
             }
@@ -213,7 +238,7 @@ class EasyConnProber(
         if (bindConflict) {
             log("!! link ports are held by another app (usually the official CFMoto/EasyConnect app). " +
                 "Close it (force-stop) and reconnect — OpenCfMoto needs ports ${LISTEN_PORTS.toList()}.")
-            ConnectionState.set(Phase.ERROR, "close the official CFMoto app, then reconnect")
+            publishProjectionState { ConnectionState.set(Phase.ERROR, R.string.conn_detail_cfmoto) }
             stop()
             return
         }
@@ -279,6 +304,13 @@ class EasyConnProber(
         multicastLock?.let { try { if (it.isHeld) it.release() } catch (_: Exception) {} }
         multicastLock = null
         log("stopped")
+    }
+
+    /** หลัง stop แล้ว ตรวจแบบไม่รอว่าคำขอตั้งค่า encoder รอบเก่าจบหรือยัง */
+    internal fun isVideoConfigIdle(): Boolean {
+        if (!videoConfigLock.tryLock()) return false
+        videoConfigLock.unlock()
+        return true
     }
 
     // ---- Watchdog surface (read/driven by AndroidAutoService's auto-recovery loop) ----
@@ -386,7 +418,7 @@ class EasyConnProber(
             val bindErr = BikeWifi.testBikeSocketBind(context)
             if (BikeWifi.isVpnBindBlocked(context, bindErr)) {
                 log("!! VPN kill-switch blocked bike bind after probe failure: ${bindErr?.message}")
-                ConnectionState.set(Phase.ERROR, "VPN kill-switch blocking bike Wi‑Fi")
+                publishProjectionState { ConnectionState.set(Phase.ERROR, R.string.conn_detail_vpn) }
             } else if (BikeWifi.isVpnActive(context)) {
                 log("!! probe never reached the bike; an internet VPN is also active " +
                     "(${BikeWifi.vpnNetworksSummary(context)}). If this keeps happening, turn the VPN " +
@@ -398,10 +430,12 @@ class EasyConnProber(
                         "Keep Nav QR open on the dash. If this is Kove/Thinkerride, check " +
                         "[DISC] thinkerride-scan in Share Logs.",
                 )
-                ConnectionState.set(
-                    Phase.ERROR,
-                    context.getString(R.string.conn_detail_easyconn_offline),
-                )
+                publishProjectionState {
+                    ConnectionState.set(
+                        Phase.ERROR,
+                        R.string.conn_detail_easyconn_offline,
+                    )
+                }
             }
         }
     }
@@ -454,7 +488,7 @@ class EasyConnProber(
                 if (everConnected) {
                     log("!! ignoring VPN bind blip — bike already linked this session; will retry")
                 } else {
-                    ConnectionState.set(Phase.ERROR, "VPN kill-switch blocking bike Wi‑Fi")
+                    publishProjectionState { ConnectionState.set(Phase.ERROR, R.string.conn_detail_vpn) }
                     return
                 }
             } catch (e: Exception) {
@@ -546,14 +580,17 @@ class EasyConnProber(
      * capped, backed-off retry so a genuinely-gone bike doesn't spin forever.
      */
     private fun onAllConnectionsClosed() {
-        if (!running || !everConnected || reprobing) return
+        if (!running || !everConnected) return
+        handshake.projectionVersions = null
+        if (reprobing) return
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
             log("[reconnect] gave up after $reconnectAttempts attempts — tap Connect to retry")
-            ConnectionState.set(Phase.ERROR, "lost bike link")
+            publishProjectionState { ConnectionState.set(Phase.ERROR, R.string.conn_detail_link_lost) }
             return
         }
         reprobing = true
-        ConnectionState.set(Phase.RECONNECTING, "attempt ${reconnectAttempts + 1}")
+        val nextAttempt = reconnectAttempts + 1
+        publishProjectionState { ConnectionState.set(Phase.RECONNECTING, R.string.conn_detail_attempt, nextAttempt) }
         thread(name = "ec-reprobe", isDaemon = true) {
             try {
                 while (running && liveConns.get() == 0 && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
@@ -677,11 +714,18 @@ class EasyConnProber(
                     }
                 }
                 val (rw, rh) = handshake.profile.roundCaptureDimensions(w, h)
+                TftDiagnostics.recordProjectionCanvas(w, h, fps, rw, rh)
                 negW = rw
                 negH = rh
                 // If Android Auto is the source (shared pipeline), size its encoder + letterbox
                 // compositor to this bike canvas now — before the bike starts pulling frames (112/114).
-                AaVideoBridge.pipeline?.configureBikeCanvas(negW, negH)
+                videoConfigLock.lock()
+                try {
+                    if (!running) return
+                    AaVideoBridge.pipeline?.configureBikeCanvas(negW, negH)
+                } finally {
+                    videoConfigLock.unlock()
+                }
                 // RLY_RV_CONFIG_CAPTURE (17): encoder(i32) | width&~15(s16) | height&~15(s16) | ext(byte)
                 val rly = ByteBuffer.allocate(9).order(ByteOrder.LITTLE_ENDIAN)
                 rly.putInt(0, if (wantEncoder == 0) 2 else wantEncoder)
@@ -737,9 +781,13 @@ class EasyConnProber(
                     log("[$tag] REQ_RV_DATA_NEXT(114): no frame ready")
                 } else {
                     sendFrameRaw(out, frame)
+                    if (video != null && video === AaVideoBridge.pipeline) RideScreenLiveDashboard.videoFrameSent()
                     framesSent++
                     lastFrameAt = System.currentTimeMillis()
-                    if (framesSent == 1) ConnectionState.set(Phase.STREAMING)
+                    if (framesSent == 1 && running) {
+                        val versions = handshake.projectionVersions
+                        publishProjectionState { ConnectionState.setProjectionStreaming(versions) }
+                    }
                     if (framesSent <= 5 || framesSent % 60 == 0)
                         log("[$tag] sent frame #$framesSent (${frame.size}b)")
                 }

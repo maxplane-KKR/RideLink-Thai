@@ -1,5 +1,6 @@
 package dev.zanderp.opencfmoto
 
+import android.content.Context
 import androidx.annotation.StringRes
 
 /**
@@ -27,18 +28,31 @@ enum class Phase(@StringRes val labelRes: Int, val logLabel: String, val busy: B
 }
 
 object ConnectionState {
+    data class ProjectionVersions(val client: String?, val sdk: String?)
+
+    @Volatile
+    var projectionVersions: ProjectionVersions? = null
+        private set
+
+    class Detail(private val raw: String = "", @StringRes private val res: Int = 0, private vararg val args: Any) {
+        fun resolve(context: Context): String = if (res == 0) raw else context.getString(res, *args)
+        fun isResource(@StringRes resource: Int): Boolean = res == resource
+        fun diagnostic(): String = if (res == 0) raw else "detail resource 0x${res.toString(16)}"
+        internal fun resourceId(): Int = res
+    }
+
     @Volatile
     var phase: Phase = Phase.IDLE
         private set
 
     /** Extra detail appended to the phase label (e.g. bike name, retry count). */
     @Volatile
-    var detail: String = ""
+    var detail = Detail()
         private set
 
     /** Observer (MainActivity) — receives (phase, detail) on every transition, on any thread. */
     @Volatile
-    var listener: ((Phase, String) -> Unit)? = null
+    var listener: ((Phase, Detail) -> Unit)? = null
 
     /**
      * Move to [newPhase]. Pass [newDetail] to change the trailing detail, or leave it null to keep
@@ -46,10 +60,31 @@ object ConnectionState {
      * component can flip to [Phase.STREAMING] without knowing which bike it is).
      */
     fun set(newPhase: Phase, newDetail: String? = null) {
+        publish(newPhase, newDetail?.let { Detail(it) })
+    }
+
+    fun set(newPhase: Phase, @StringRes detailRes: Int, vararg args: Any) {
+        publish(newPhase, Detail(res = detailRes, args = args))
+    }
+
+    fun setProjectionStreaming(versions: ProjectionVersions?) {
+        TftDiagnostics.markConnectionStartup(ConnectionStartupStage.FIRST_FRAME)
+        projectionVersions = versions
+        publish(Phase.STREAMING, null)
+    }
+
+    private fun publish(newPhase: Phase, newDetail: Detail?) {
+        val streamingChanged = (phase == Phase.STREAMING) != (newPhase == Phase.STREAMING)
+        if (newPhase != Phase.STREAMING) projectionVersions = null
         phase = newPhase
+        if (streamingChanged) LiveObd.onProjectionStateChanged()
         if (newDetail != null) detail = newDetail
         val d = detail
-        val text = if (d.isBlank()) newPhase.logLabel else "${newPhase.logLabel} — $d"
+        val diagnostic = d.diagnostic()
+        TftDiagnostics.recordConnection(
+            newPhase, newDetail?.resourceId()?.takeIf { it != 0 }, projectionVersions,
+        )
+        val text = if (diagnostic.isBlank()) newPhase.logLabel else "${newPhase.logLabel} — $diagnostic"
         LogBus.log("[state] $text")
         try {
             listener?.invoke(newPhase, d)

@@ -78,6 +78,9 @@ class VideoPipeline(
     private var mirrorScaler: AaCompositor? = null
     private var encoderW = 0
     private var encoderH = 0
+    private val encoderLock = java.util.concurrent.locks.ReentrantLock()
+    private val stopCleanupScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var encoderNeedsCleanup = false
     @Volatile private var running = false
     /** True after a successful [start] until [stop]. */
     val isAlive: Boolean get() = running
@@ -150,6 +153,8 @@ class VideoPipeline(
 
     /** Create + start the H.264 encoder at [w]x[h] and its drain thread. Returns false on failure. */
     private fun createEncoder(w: Int, h: Int): Boolean {
+        var createdCodec: MediaCodec? = null
+        var createdSurface: Surface? = null
         try {
             val profile = BikeProfileHolder.active
             // Map / GPX Presentation changes every pan/GPS tick — give H.264 more bits + shorter GOP
@@ -194,6 +199,7 @@ class VideoPipeline(
                 setInteger(MediaFormat.KEY_LATENCY, 1)
             }
             val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            createdCodec = c
             val forceBaseline = BikeProfileHolder.active.forceBaseline
             try {
                 if (forceBaseline) {
@@ -213,8 +219,10 @@ class VideoPipeline(
                 c.reset()
                 c.configure(baseFormat(), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             }
-            inputSurface = c.createInputSurface()
+            val surface = c.createInputSurface()
+            createdSurface = surface
             c.start()
+            inputSurface = surface
             codec = c
             baseBitrate = bitrate; currentBitrate = bitrate
             encoderW = w; encoderH = h
@@ -227,8 +235,19 @@ class VideoPipeline(
             log("[VIDEO] MediaCodec outputFormat=$outFmt")
             maybeStartDump()
             if (drainThread == null) drainThread = thread(name = "video-drain", isDaemon = true) { drainLoop() }
+            createdCodec = null
+            createdSurface = null
             return true
         } catch (e: Exception) {
+            if (codec === createdCodec) codec = null
+            if (inputSurface === createdSurface) inputSurface = null
+            try { createdCodec?.stop() } catch (_: Exception) {}
+            try { createdCodec?.release() } catch (_: Exception) {}
+            try { createdSurface?.release() } catch (_: Exception) {}
+            try { dumpOut?.close() } catch (_: Exception) {}
+            dumpOut = null
+            encoderW = 0; encoderH = 0
+            baseBitrate = 0; currentBitrate = 0
             log("[VIDEO] createEncoder failed: $e")
             return false
         }
@@ -244,50 +263,96 @@ class VideoPipeline(
      *   (Yunmo SoftAP learns the canvas from cmd 0x32 after AA may already have started).
      */
     fun configureBikeCanvas(w: Int, h: Int, force: Boolean = false) {
-        if (!compositor) return
-        if (codec != null) {
-            if (encoderW == w && encoderH == h) return
-            if (!force) {
-                log(
-                    "[VIDEO] bike canvas changed ${encoderW}x$encoderH → ${w}x$h — " +
-                        "live resize unsupported, keeping ${encoderW}x$encoderH",
-                )
-                return
+        encoderLock.lock()
+        try {
+            if (!compositor || !running) return
+            if (encoderNeedsCleanup && !releaseBikeEncoder()) return
+            if (codec != null) {
+                if (encoderW == w && encoderH == h) return
+                if (!force) {
+                    log(
+                        "[VIDEO] bike canvas changed ${encoderW}x$encoderH → ${w}x$h — " +
+                            "live resize unsupported, keeping ${encoderW}x$encoderH",
+                    )
+                    return
+                }
+                log("[VIDEO] bike canvas force-resize ${encoderW}x$encoderH → ${w}x$h")
+                if (!releaseBikeEncoder()) return
             }
-            log("[VIDEO] bike canvas force-resize ${encoderW}x$encoderH → ${w}x$h")
+            if (!createEncoder(w, h)) return
+            val src = BikeProfileHolder.aaVideo
+            val surf = inputSurface
+            if (surf != null) {
+                val fit = VideoPrefs.fit(context)
+                val power = VideoPrefs.power(context)
+                // Match-panel-aspect: AA drew its UI into (coded - margins); sample only that sub-rect so
+                // the aspect-correct content — not the padded coded frame — is mapped onto the bike canvas.
+                val margins = BikeProfileHolder.aaContentMargins
+                val usableW = (src.width - margins.marginW).coerceIn(16, src.width)
+                val usableH = (src.height - margins.marginH).coerceIn(16, src.height)
+                aaCompositor?.setFrameCap(power.fps)
+                aaCompositor?.setSourceCrop(usableW.toFloat() / src.width, usableH.toFloat() / src.height)
+                aaCompositor?.setOutput(surf, w, h, usableW, usableH, fit)
+                log("[VIDEO] bike canvas ${w}x$h configured; AA source ${src.width}x${src.height} " +
+                    "usable ${usableW}x$usableH (margins ${margins.marginW}x${margins.marginH}) → " +
+                    "fit=$fit power=${power.fps}fps")
+            }
+        } finally {
+            encoderLock.unlock()
+        }
+    }
+
+    /** ปลด encoder ของรถโดยคง compositor input และเซสชัน Android Auto ไว้ */
+    fun releaseBikeEncoder(): Boolean {
+        if (!encoderLock.tryLock()) return false
+        try {
+            if (!compositor) return true
+            encoderNeedsCleanup = true
+            if (aaCompositor?.clearOutput() == false) {
+                log("[VIDEO] รอปลด output รถก่อนหยุด encoder")
+                return false
+            }
+            val drain = drainThread
+            if (drain === Thread.currentThread()) return false
+            drain?.interrupt()
             try {
-                codec?.stop()
-            } catch (_: Exception) {}
+                drain?.join(350)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return false
+            }
+            if (drain?.isAlive == true) {
+                log("[VIDEO] รอเธรด encoder หยุดก่อนปล่อย codec")
+                return false
+            }
+            drainThread = null
+            try { codec?.stop() } catch (_: Exception) {}
             try {
                 codec?.release()
-            } catch (_: Exception) {}
-            codec = null
+                codec = null
+            } catch (e: Exception) {
+                log("[VIDEO] ปล่อย codec ไม่สำเร็จ: ${e.javaClass.simpleName}")
+                return false
+            }
             try {
                 inputSurface?.release()
-            } catch (_: Exception) {}
-            inputSurface = null
-            encoderW = 0
-            encoderH = 0
-            codecConfig = null
+                inputSurface = null
+            } catch (e: Exception) {
+                log("[VIDEO] ปล่อย surface ไม่สำเร็จ: ${e.javaClass.simpleName}")
+                return false
+            }
+            try { dumpOut?.flush(); dumpOut?.close() } catch (_: Exception) {}
+            dumpOut = null
+            encoderW = 0; encoderH = 0
+            baseBitrate = 0; currentBitrate = 0
             frameQueue.clear()
-        }
-        if (!createEncoder(w, h)) return
-        val src = BikeProfileHolder.aaVideo
-        val surf = inputSurface
-        if (surf != null) {
-            val fit = VideoPrefs.fit(context)
-            val power = VideoPrefs.power(context)
-            // Match-panel-aspect: AA drew its UI into (coded - margins); sample only that sub-rect so
-            // the aspect-correct content — not the padded coded frame — is mapped onto the bike canvas.
-            val margins = BikeProfileHolder.aaContentMargins
-            val usableW = (src.width - margins.marginW).coerceIn(16, src.width)
-            val usableH = (src.height - margins.marginH).coerceIn(16, src.height)
-            aaCompositor?.setFrameCap(power.fps)
-            aaCompositor?.setSourceCrop(usableW.toFloat() / src.width, usableH.toFloat() / src.height)
-            aaCompositor?.setOutput(surf, w, h, usableW, usableH, fit)
-            log("[VIDEO] bike canvas ${w}x$h configured; AA source ${src.width}x${src.height} " +
-                "usable ${usableW}x$usableH (margins ${margins.marginW}x${margins.marginH}) → " +
-                "fit=$fit power=${power.fps}fps")
+            codecConfig = null
+            awaitKeyframe = false
+            encoderNeedsCleanup = false
+            log("[VIDEO] ปล่อย encoder จอรถแล้ว — คง Android Auto ไว้")
+            return true
+        } finally {
+            encoderLock.unlock()
         }
     }
 
@@ -367,7 +432,7 @@ class VideoPipeline(
     private fun drainLoop() {
         val codec = this.codec ?: return
         val info = MediaCodec.BufferInfo()
-        while (running) {
+        while (running && !Thread.currentThread().isInterrupted) {
             val idx = try { codec.dequeueOutputBuffer(info, 100_000) } catch (e: Exception) {
                 log("[VIDEO] dequeue failed: $e"); break
             }
@@ -453,6 +518,16 @@ class VideoPipeline(
      */
     fun setFrameCap(fps: Int) {
         aaCompositor?.setFrameCap(fps)
+    }
+
+    /** หน้าปัดสดวางบนภาพฉายไปยังรถ; null กลับไปแสดง Android Auto */
+    internal fun setLiveLayer(
+        build: ((Int, Int) -> android.graphics.Bitmap?)?,
+        onEvent: ((LiveLayerEvent) -> Unit)? = null,
+    ): Boolean {
+        val compositor = aaCompositor ?: return false
+        compositor.setLiveLayer(build, onEvent)
+        return true
     }
 
     /** Compositor mode: the surface the AA decoder renders into (letterboxed before the encoder). */
@@ -552,6 +627,38 @@ class VideoPipeline(
      */
     fun stop(abandonNavigation: Boolean = true) {
         running = false
+        if (!encoderLock.tryLock()) {
+            scheduleStopCleanup()
+            return
+        }
+        if (encoderNeedsCleanup) {
+            encoderLock.unlock()
+            scheduleStopCleanup()
+            return
+        }
+        val complete = try { finishStopLocked() } finally { encoderLock.unlock() }
+        if (!complete) scheduleStopCleanup()
+    }
+
+    private fun scheduleStopCleanup() {
+        if (!stopCleanupScheduled.compareAndSet(false, true)) return
+        thread(name = "video-stop", isDaemon = true) {
+            try {
+                repeat(8) {
+                    encoderLock.lock()
+                    val complete = try { finishStopLocked() } finally { encoderLock.unlock() }
+                    if (complete) return@thread
+                    try { Thread.sleep(250) } catch (_: InterruptedException) { return@thread }
+                }
+                log("[VIDEO] ปิด encoder ไม่สำเร็จหลังลองซ้ำ")
+            } finally {
+                stopCleanupScheduled.set(false)
+            }
+        }
+    }
+
+    private fun finishStopLocked(): Boolean {
+        if (compositor && !releaseBikeEncoder()) return false
         try { dumpOut?.flush(); dumpOut?.close() } catch (_: Exception) {}
         if (dumpOut != null) log("[DUMP] stopped: $dumpPath ($dumpFrames frames) — Share Log to send it")
         dumpOut = null
@@ -573,6 +680,7 @@ class VideoPipeline(
         inputSurface = null
         frameQueue.clear()
         codecConfig = null
+        return true
     }
 
     companion object {

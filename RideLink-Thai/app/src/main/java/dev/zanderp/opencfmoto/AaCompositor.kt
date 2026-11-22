@@ -1,5 +1,6 @@
 package dev.zanderp.opencfmoto
 
+import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.opengl.EGL14
 import android.opengl.EGLConfig
@@ -9,9 +10,11 @@ import android.opengl.EGLExt
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
+import android.opengl.GLUtils
 import android.opengl.Matrix
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.view.Surface
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -105,6 +108,63 @@ class AaCompositor(private val log: (String) -> Unit) {
     private val KEEPALIVE_TICK_MS = 150L
     private val IDLE_REDRAW_MS = 2000L
 
+    // แนวทาง live layer ปรับจาก RideScreen AA v2.4.1 (AGPL-3.0-or-later)
+    private var liveBuild: ((Int, Int) -> Bitmap?)? = null
+    private var liveBitmap: Bitmap? = null
+    private var liveBitmapGeneration = 0
+    private var uploadedLiveBitmap: Bitmap? = null
+    private var uploadedLiveGeneration = 0
+    private var liveEvent: ((LiveLayerEvent) -> Unit)? = null
+    private val liveEventsReported = mutableSetOf<LiveLayerEvent>()
+    private var liveProgram = 0
+    private var liveTexture = 0
+    private val liveQuad: FloatBuffer = ByteBuffer
+        .allocateDirect(4 * 4 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
+            put(floatArrayOf(-1f, -1f, 0f, 1f, 1f, -1f, 1f, 1f, -1f, 1f, 0f, 0f, 1f, 1f, 1f, 0f))
+            position(0)
+        }
+
+    fun setLiveLayer(build: ((Int, Int) -> Bitmap?)?) = setLiveLayer(build, null)
+
+    internal fun setLiveLayer(build: ((Int, Int) -> Bitmap?)?, onEvent: ((LiveLayerEvent) -> Unit)?) {
+        handler.post {
+            handler.removeCallbacks(liveTick)
+            liveBuild = build
+            liveBitmap = null
+            uploadedLiveBitmap = null
+            liveEvent = onEvent
+            liveEventsReported.clear()
+            if (build != null) liveTick.run() else if (hasContent) drawFrame()
+        }
+    }
+
+    private fun reportLiveEvent(event: LiveLayerEvent): Boolean {
+        if (!liveEventsReported.add(event)) return false
+        try { liveEvent?.invoke(event) } catch (_: Exception) {}
+        return true
+    }
+
+    private val liveTick = object : Runnable {
+        override fun run() {
+            val build = liveBuild ?: return
+            if (canvasW > 0 && canvasH > 0 && windowSurface != EGL14.EGL_NO_SURFACE) {
+                val bitmap = try { build(canvasW, canvasH)?.takeUnless { it.isRecycled } } catch (e: Exception) {
+                    if (reportLiveEvent(LiveLayerEvent.RENDER_FAILED))
+                        log("[DASHBOARD] render failed: ${e.javaClass.simpleName}")
+                    null
+                }
+                // ตัววาดใช้ Bitmap เดิมซ้ำ จึงต้องดู generation ด้วยเมื่อพิกเซลเปลี่ยน
+                val generation = bitmap?.generationId ?: 0
+                if (bitmap !== liveBitmap || generation != liveBitmapGeneration) {
+                    liveBitmap = bitmap
+                    liveBitmapGeneration = generation
+                    if (bitmap != null || hasContent) drawFrame()
+                }
+            }
+            handler.postDelayed(this, 125L)
+        }
+    }
+
     // Full-screen quad (triangle strip): pos.xy + tex.uv interleaved.
     private val quad: FloatBuffer = ByteBuffer
         .allocateDirect(4 * 4 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
@@ -190,9 +250,47 @@ class AaCompositor(private val log: (String) -> Unit) {
                 canvasW = cw; canvasH = ch; srcW = sw; srcH = sh; fitMode = fit
                 computeViewport()
                 log("[COMPOSITOR] output set canvas=${cw}x$ch src=${sw}x$sh fit=$fit → draw rect=${vpW}x$vpH @($vpX,$vpY)")
+                if (liveBuild != null) {
+                    handler.removeCallbacks(liveTick)
+                    liveBitmap = null
+                    liveTick.run()
+                }
             } catch (e: Exception) {
                 log("[COMPOSITOR] setOutput failed: $e")
             }
+        }
+    }
+
+    /** ปลดเฉพาะ output ของรถ โดยคง input และพรีวิวโทรศัพท์ไว้ */
+    fun clearOutput(): Boolean {
+        fun detach(): Boolean {
+            if (windowSurface == EGL14.EGL_NO_SURFACE) return true
+            return try {
+                if (!EGL14.eglMakeCurrent(eglDisplay, pbuffer, pbuffer, eglContext) ||
+                    !EGL14.eglDestroySurface(eglDisplay, windowSurface)) {
+                    log("[COMPOSITOR] ไม่สามารถปลด output รถ")
+                    false
+                } else {
+                    windowSurface = EGL14.EGL_NO_SURFACE
+                    canvasW = 0; canvasH = 0
+                    true
+                }
+            } catch (e: Exception) {
+                log("[COMPOSITOR] ปลด output รถไม่สำเร็จ: ${e.javaClass.simpleName}")
+                false
+            }
+        }
+        if (Looper.myLooper() == thread.looper) return detach()
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val detached = java.util.concurrent.atomic.AtomicBoolean(false)
+        if (!handler.post {
+                try { detached.set(detach()) } finally { latch.countDown() }
+            }) return false
+        return try {
+            latch.await(500, java.util.concurrent.TimeUnit.MILLISECONDS) && detached.get()
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
         }
     }
 
@@ -414,6 +512,13 @@ class AaCompositor(private val log: (String) -> Unit) {
             return
         }
         hasContent = true
+        if (liveBuild != null && liveBitmap != null) {
+            if (previewSurface != EGL14.EGL_NO_SURFACE) {
+                surfaceTexture.getTransformMatrix(texMatrix)
+                renderTo(previewSurface, ppX, ppY, ppW, ppH)
+            }
+            return
+        }
         // Throttle live frames to the power-mode cap. A too-soon frame is kept (texture already
         // latched above) and drawn by the keep-alive tick, so we cap the rate without losing motion.
         val idleMs = android.os.SystemClock.uptimeMillis() - lastDrawMs
@@ -430,7 +535,8 @@ class AaCompositor(private val log: (String) -> Unit) {
      */
     private val keepAlive = object : Runnable {
         override fun run() {
-            if (hasContent && (windowSurface != EGL14.EGL_NO_SURFACE || previewSurface != EGL14.EGL_NO_SURFACE)) {
+            if ((hasContent || liveBitmap != null) &&
+                (windowSurface != EGL14.EGL_NO_SURFACE || previewSurface != EGL14.EGL_NO_SURFACE)) {
                 val idleMs = android.os.SystemClock.uptimeMillis() - lastDrawMs
                 if (pendingFrame && idleMs >= minFrameIntervalMs) {
                     // Flush the last coalesced live frame so motion doesn't stall at the cap.
@@ -465,6 +571,22 @@ class AaCompositor(private val log: (String) -> Unit) {
         // Black background (the letterbox bars).
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+        val bitmap = liveBitmap
+        if (target === windowSurface && liveBuild != null && bitmap != null && !bitmap.isRecycled) {
+            val drawn = runCatching { drawLiveBitmap(bitmap) }.getOrElse {
+                if (reportLiveEvent(LiveLayerEvent.GL_FAILED))
+                    log("[DASHBOARD] GL failed: ${it.javaClass.simpleName}")
+                false
+            }
+            if (drawn) {
+                EGLExt.eglPresentationTimeANDROID(eglDisplay, target, System.nanoTime())
+                val swapped = EGL14.eglSwapBuffers(eglDisplay, target)
+                reportLiveEvent(if (swapped) LiveLayerEvent.COMPOSITED else LiveLayerEvent.SWAP_FAILED)
+                return
+            }
+            reportLiveEvent(LiveLayerEvent.GL_FAILED)
+        }
 
         // FILL may compute a viewport taller/wider than the canvas (center-crop). Scissor so we
         // never paint outside the bike encoder surface.
@@ -502,12 +624,58 @@ class AaCompositor(private val log: (String) -> Unit) {
         EGL14.eglSwapBuffers(eglDisplay, target)
     }
 
+    private fun drawLiveBitmap(bitmap: Bitmap): Boolean {
+        if (liveProgram == 0) {
+            val vs = "attribute vec4 aPosition; attribute vec2 aTexCoord; varying vec2 uv; " +
+                "void main(){ gl_Position=aPosition; uv=aTexCoord; }"
+            val fs = "precision mediump float; varying vec2 uv; uniform sampler2D image; " +
+                "void main(){ gl_FragColor=texture2D(image,uv); }"
+            liveProgram = linkProgram(vs, fs)
+            val ids = IntArray(1)
+            GLES20.glGenTextures(1, ids, 0)
+            liveTexture = ids[0]
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, liveTexture)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        }
+        GLES20.glViewport(0, 0, canvasW, canvasH)
+        GLES20.glUseProgram(liveProgram)
+        val position = GLES20.glGetAttribLocation(liveProgram, "aPosition")
+        val coord = GLES20.glGetAttribLocation(liveProgram, "aTexCoord")
+        liveQuad.position(0)
+        GLES20.glVertexAttribPointer(position, 2, GLES20.GL_FLOAT, false, 16, liveQuad)
+        GLES20.glEnableVertexAttribArray(position)
+        liveQuad.position(2)
+        GLES20.glVertexAttribPointer(coord, 2, GLES20.GL_FLOAT, false, 16, liveQuad)
+        GLES20.glEnableVertexAttribArray(coord)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, liveTexture)
+        val generation = bitmap.generationId
+        val upload = bitmap !== uploadedLiveBitmap || generation != uploadedLiveGeneration
+        if (upload) GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+        GLES20.glUniform1i(GLES20.glGetUniformLocation(liveProgram, "image"), 0)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        GLES20.glDisableVertexAttribArray(position)
+        GLES20.glDisableVertexAttribArray(coord)
+        val drawn = GLES20.glGetError() == GLES20.GL_NO_ERROR
+        if (drawn && upload) {
+            uploadedLiveBitmap = bitmap
+            uploadedLiveGeneration = generation
+        }
+        return drawn
+    }
+
     fun release() {
         handler.removeCallbacks(keepAlive)
+        handler.removeCallbacks(liveTick)
         handler.post {
             try { inputSurface?.release() } catch (_: Exception) {}
             try { if (::surfaceTexture.isInitialized) surfaceTexture.release() } catch (_: Exception) {}
             if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+                if (liveTexture != 0) GLES20.glDeleteTextures(1, intArrayOf(liveTexture), 0)
+                if (liveProgram != 0) GLES20.glDeleteProgram(liveProgram)
                 EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
                 if (windowSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, windowSurface)
                 if (previewSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, previewSurface)

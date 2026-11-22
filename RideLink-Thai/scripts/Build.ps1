@@ -1,6 +1,8 @@
 param(
     [string[]]$Tasks = @('assembleDebug'),
     [switch]$Offline,
+    [switch]$Demo,
+    [string]$ApkOutputDir,
     [string]$Sdk,
     [string]$Jdk,
     [string]$GradleHome
@@ -120,6 +122,7 @@ try {
     $gradleArguments = @('--daemon','--console=plain','--project-dir',$projectRoot,
         "-Duser.home=$buildUserHome","-Djava.io.tmpdir=$tempPath")
     if ($Offline) { $gradleArguments += '--offline' }
+    if ($Demo) { $gradleArguments += '-PridelinkTftDemo=true' }
     $gradleArguments += $Tasks
     & $gradle @gradleArguments
     if ($LASTEXITCODE -ne 0) { throw "Gradle ไม่สำเร็จ (exit $LASTEXITCODE)" }
@@ -132,20 +135,24 @@ try {
         if (Test-Path -LiteralPath $apk) {
             & (Join-Path $Sdk 'build-tools\34.0.0\apksigner.bat') verify $apk
             if ($LASTEXITCODE -ne 0) { throw 'ตรวจลายเซ็น APK ไม่ผ่าน' }
-            $localApkDir = Join-Path $projectRoot 'app\build\outputs\apk\debug'
-            New-Item -ItemType Directory -Force -Path $localApkDir | Out-Null
-            $copiedApk = Join-Path $localApkDir 'app-debug.apk'
-            Copy-Item -LiteralPath $apk -Destination $copiedApk -Force
-            
             # Master APK directory
             $workspaceRoot = (Split-Path -Parent $projectRoot)
-            $apkMasterDir = Join-Path $workspaceRoot 'APK'
+            $apkMasterDir = if (!$ApkOutputDir) {
+                $outerApkDir = Join-Path (Split-Path -Parent $workspaceRoot) 'APK'
+                if (Test-Path -LiteralPath $outerApkDir -PathType Container) { $outerApkDir }
+                else { Join-Path $workspaceRoot 'APK' }
+            } elseif ([IO.Path]::IsPathRooted($ApkOutputDir)) {
+                [IO.Path]::GetFullPath($ApkOutputDir)
+            } else {
+                [IO.Path]::GetFullPath((Join-Path $workspaceRoot $ApkOutputDir))
+            }
             New-Item -ItemType Directory -Force -Path $apkMasterDir | Out-Null
-            Copy-Item -LiteralPath $apk -Destination (Join-Path $apkMasterDir 'RideLink-Thai-latest.apk') -Force
+            $apkName = if ($Demo) { 'RideLink-Thai-demo.apk' } else { 'RideLink-Thai-latest.apk' }
+            $masterApk = Join-Path $apkMasterDir $apkName
+            Copy-Item -LiteralPath $apk -Destination $masterApk -Force
 
-            Write-Output "APK: $copiedApk"
-            Write-Output "Master APK: $(Join-Path $apkMasterDir 'RideLink-Thai-latest.apk')"
-            Get-FileHash -LiteralPath $copiedApk -Algorithm SHA256 | Select-Object Hash,Path
+            Write-Output "Master APK: $masterApk"
+            Get-FileHash -LiteralPath $masterApk -Algorithm SHA256 | Select-Object Hash,Path
         }
     }
 } finally {

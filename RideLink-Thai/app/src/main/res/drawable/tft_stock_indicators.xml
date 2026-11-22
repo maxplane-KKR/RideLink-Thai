@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ลำดับอ้างอิงคู่มือรุ่นไทย หน้า 6-2 สีอ้างอิงภาพ Zontes Thailand 150X-Meter1.jpg -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="624dp" android:height="32dp"
+    android:viewportWidth="624" android:viewportHeight="32">
+    <group android:translateX="3" android:translateY="1">
+        <path android:fillColor="#82D067"
+            android:pathData="M0,14 L15,3 V9 H33 V19 H15 V25 Z" />
+    </group>
+    <group android:translateX="50" android:translateY="1" android:scaleX="0.9" android:scaleY="0.9">
+        <path android:strokeColor="#82D067" android:strokeWidth="2.1" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M2,24 H18 M4,24 V26 M10,24 V26 M18,24 L21,20 H27 Q29,20 29,22 V28 H24 L22,26 H18 Z M25,23 V26 M16,17 Q23,12 31,17 M13,13 Q23,6 33,13 M10,9 Q23,0 35,9" />
+    </group>
+    <group android:translateX="96" android:translateY="1" android:scaleX="0.9" android:scaleY="0.9">
+        <path android:strokeColor="#F4676D" android:strokeWidth="1.9" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M16,3 V17 A3,3 0,1 0,20 17 V3 H16 Z M20,6 H26 M20,10 H25 M20,14 H26 M2,22 Q5,18 8,22 T14,22 T20,22 T26,22 M2,27 Q5,23 8,27 T14,27 T20,27 T26,27" />
+    </group>
+    <group android:translateX="172" android:translateY="1" android:scaleX="0.9" android:scaleY="0.9">
+        <path android:strokeColor="#FFCA73" android:strokeWidth="1.9" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M6,3 L7,7 C1,11 1,19 6,24 L7,27 H26 L27,24 C32,19 32,11 27,7 L28,3 M10,27 V29 M14,27 V29 M19,27 V29 M23,27 V29 M9,10 H16 M12.5,10 V21 M24,10 H21 Q18,10 18,14 V17 Q18,21 21,21 H24" />
+    </group>
+    <group android:translateX="217" android:translateY="1" android:scaleX="0.9" android:scaleY="0.9">
+        <path android:strokeColor="#FFCA73" android:strokeWidth="1.9" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M5,2 Q-4,14 5,27 M30,2 Q39,14 30,27 M17.5,3 A11.5,11.5 0,1 1,17.5 26 A11.5,11.5 0,1 1,17.5 3" />
+        <path android:strokeColor="#FFCA73" android:strokeWidth="1.35" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M9,18 L11.7,11 L14.4,18 M10,16 H13.4 M16.5,11 H19 C22,11 22,14.5 19,14.5 H16.5 M19,14.5 C22,14.5 22,18 19,18 H16.5 V11 M26.5,11 H24 Q22.6,11 22.6,12.8 Q22.6,14.5 24.5,14.5 Q27,14.5 27,16.4 Q27,18 25,18 H22.7" />
+    </group>
+    <group android:translateX="266" android:translateY="1" android:scaleX="0.9" android:scaleY="0.9">
+        <path android:strokeColor="#FFCA73" android:strokeWidth="1.9" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M3,13 H8 L13,7 H27 L32,11 H37 V14 H41 V24 H35 V21 H31 V25 H17 L12,22 H8 V18 H3 Z M1,10 V21 M18,7 V4 H25 V7 M15,4 H28" />
+    </group>
+    <group android:translateX="315" android:translateY="1" android:scaleX="0.9" android:scaleY="0.9">
+        <path android:strokeColor="#FFCA73" android:strokeWidth="1.9" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M6,3 L7,7 C1,11 1,19 6,24 L7,27 H26 L27,24 C32,19 32,11 27,7 L28,3 M16.5,5 V17 M10,27 V29 M14,27 V29 M19,27 V29 M23,27 V29" />
+        <path android:fillColor="#FFCA73"
+            android:pathData="M16.5,20 A1.6,1.6 0,1 1,16.5 23.2 A1.6,1.6 0,1 1,16.5 20 Z" />
+    </group>
+    <group android:translateX="360" android:translateY="1" android:scaleX="0.9" android:scaleY="0.9">
+        <path android:strokeColor="#F4676D" android:strokeWidth="1.9" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M2,8 H9 V5 H13 V8 H23 V5 H27 V8 H36 V25 H2 Z M7,14 H14 M24,14 H31 M27.5,10.5 V17.5" />
+    </group>
+    <group android:translateX="406" android:translateY="1" android:scaleX="0.9" android:scaleY="0.9">
+        <path android:fillColor="#FFCA73"
+            android:pathData="M3,7 Q10,3 16,10 H35 Q39,10 39,14 Q39,18 35,18 H16 Q10,25 3,21 L10,16 V12 Z" />
+    </group>
+    <group android:translateX="454" android:translateY="1" android:scaleX="0.9" android:scaleY="0.9">
+        <path android:strokeColor="#9CCBE9" android:strokeWidth="1.9" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M16,4 H20 C28,4 34,9 34,15 C34,21 28,25 20,25 H16 Q13,15 16,4 Z M1,5 H11 M1,10 H11 M1,15 H11 M1,20 H11 M1,25 H11" />
+    </group>
+    <group android:translateX="501" android:translateY="1" android:scaleX="0.9" android:scaleY="0.9">
+        <path android:strokeColor="#8DD477" android:strokeWidth="1.9" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M16,4 H20 C28,4 34,9 34,15 C34,21 28,25 20,25 H16 Q13,15 16,4 Z M1,9 L11,5 M1,14 L11,10 M1,19 L11,15 M1,24 L11,20 M1,29 L11,25" />
+    </group>
+    <group android:translateX="548" android:translateY="1" android:scaleX="0.9" android:scaleY="0.9">
+        <path android:strokeColor="#8DD477" android:strokeWidth="1.9" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M9,26 A13,13 0,1 1,26,23 M11,20 L16,9 L21,20 M13,16 H19" />
+        <path android:fillColor="#8DD477"
+            android:pathData="M20,26 L29,27 L26,19 Z" />
+    </group>
+    <group android:translateX="621" android:translateY="1" android:scaleX="-1">
+        <path android:fillColor="#82D067"
+            android:pathData="M0,14 L15,3 V9 H33 V19 H15 V25 Z" />
+    </group>
+</vector>

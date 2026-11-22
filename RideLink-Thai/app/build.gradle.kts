@@ -10,6 +10,7 @@ check(signingFile.isFile) { "กรุณาเรียก scripts/Build.ps1 �
 val localSigning = Properties().apply {
     signingFile.inputStream().use(::load)
 }
+val tftDemo = providers.gradleProperty("ridelinkTftDemo").orNull == "true"
 
 android {
     // คง namespace ของซอร์สที่ใช้ซ้ำ ส่วน package ที่ติดตั้งเป็นแอปใหม่
@@ -21,9 +22,9 @@ android {
         applicationId = "app.ridelink.thai"
         minSdk = 29
         targetSdk = 34
-        versionCode = 11
-        versionName = "0.2.9"
-        manifestPlaceholders["appLabel"] = "RideLinkไทย"
+        versionCode = 13
+        versionName = "0.2.11"
+        manifestPlaceholders["appLabel"] = "@string/app_name"
         buildConfigField("String", "GIT_HASH", "\"ridelink-thai\"")
     }
 
@@ -39,6 +40,10 @@ android {
     buildTypes {
         debug {
             signingConfig = signingConfigs.getByName("ridelinkLocal")
+            if (tftDemo) {
+                applicationIdSuffix = ".demo"
+                manifestPlaceholders["appLabel"] = "RideLink TH Demo"
+            }
         }
         release {
             isMinifyEnabled = false

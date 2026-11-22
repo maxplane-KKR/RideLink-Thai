@@ -34,6 +34,7 @@ object LogBus {
         // Mirror to logcat so the full diagnostic stream is capturable over adb (`adb logcat -s
         // OpenCfMoto:*`) during on-hardware debugging, not just in the in-app log view.
         Log.i(TAG, safe)
+        TftDiagnostics.recordTraceLine(line)
         try { listener?.invoke(line) } catch (_: Exception) {}
     }
 

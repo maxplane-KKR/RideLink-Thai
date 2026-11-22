@@ -65,8 +65,8 @@ object ProjectionHarness {
 
     data class AutoTriggerJudgment(
         val decision: TriggerDecision,
-        val shouldKeepPassiveWifiRequest: Boolean,
-        val reasonTh: String,
+        val reasonRes: Int,
+        val maskedSsid: String? = null,
     )
 
     /**
@@ -80,54 +80,48 @@ object ProjectionHarness {
         if (!input.autoConnectEnabled) {
             return AutoTriggerJudgment(
                 decision = TriggerDecision.HOLD_DISABLED,
-                shouldKeepPassiveWifiRequest = false,
-                reasonTh = "ปิดระบบเชื่อมต่ออัตโนมัติไว้ในหน้าตั้งค่า",
+                reasonRes = R.string.auto_disabled_reason,
             )
         }
         if (input.savedSsid.isNullOrBlank()) {
             return AutoTriggerJudgment(
                 decision = TriggerDecision.HOLD_NO_SAVED_BIKE,
-                shouldKeepPassiveWifiRequest = false,
-                reasonTh = "ยังไม่มีข้อมูล Wi-Fi รถที่บันทึกไว้",
+                reasonRes = R.string.auto_no_wifi,
             )
         }
         if (input.sessionRunning) {
             return AutoTriggerJudgment(
                 decision = TriggerDecision.HOLD_ALREADY_RUNNING,
-                shouldKeepPassiveWifiRequest = false,
-                reasonTh = "ระบบกำลังทำงานอยู่แล้ว",
+                reasonRes = R.string.auto_already_running,
             )
         }
         if (input.manuallyStopped) {
             return AutoTriggerJudgment(
                 decision = TriggerDecision.HOLD_MANUAL_STOP,
-                shouldKeepPassiveWifiRequest = false,
-                reasonTh = "ผู้ใช้สั่งหยุดด้วยตนเอง รอจนกว่าจะกดเริ่มใหม่หรือดับเครื่องเปิดใหม่",
+                reasonRes = R.string.auto_manually_stopped,
             )
         }
         if (input.msSinceLastTrigger in 0 until AUTO_TRIGGER_COOLDOWN_MS) {
             return AutoTriggerJudgment(
                 decision = TriggerDecision.HOLD_COOLDOWN,
-                shouldKeepPassiveWifiRequest = false,
-                reasonTh = "อยู่ในช่วงหน่วงเวลาป้องกันการสั่งซ้ำ",
+                reasonRes = R.string.auto_cooldown,
             )
         }
         if (input.qrWifiDetected) {
             return AutoTriggerJudgment(
                 decision = TriggerDecision.FIRE_PROJECTION,
-                shouldKeepPassiveWifiRequest = false,
-                reasonTh = "ตรวจพบสัญญาณ Wi-Fi หน้าเมนู QR ของรถ (${maskIdentifier(input.savedSsid, true)})",
+                reasonRes = R.string.auto_qr_found,
+                maskedSsid = maskIdentifier(input.savedSsid, true),
             )
         }
         val standbyNote = if (input.btBikeConnected) {
-            "ต่อ BT รถแล้ว — รอกดเมนู QR บนจอรถ"
+            R.string.auto_wait_qr
         } else {
-            "สแตนด์บายรอ BT และหน้าเมนู QR บนจอรถ"
+            R.string.auto_standby
         }
         return AutoTriggerJudgment(
             decision = TriggerDecision.ARM_WIFI_WATCHER_ONLY,
-            shouldKeepPassiveWifiRequest = true,
-            reasonTh = standbyNote,
+            reasonRes = standbyNote,
         )
     }
 
@@ -178,7 +172,7 @@ object ProjectionHarness {
      * when [masked] is true.
      */
     fun maskIdentifier(raw: String?, masked: Boolean): String {
-        if (raw.isNullOrBlank()) return "ยังไม่ได้ระบุ"
+        if (raw.isNullOrBlank()) return ""
         val clean = raw.trim()
         if (!masked) return clean
         return if (clean.length <= 4) {
@@ -292,12 +286,13 @@ object ProjectionHarness {
         val consecutiveHandshakeFailures: Int,
         val selfModeFallbackTriggered: Boolean,
         val guidanceSurfaced: Boolean,
+        val allowSelfModeFallback: Boolean = true,
     )
 
     data class AaConnectJudgment(
         val action: AaConnectAction,
         val delayMs: Long,
-        val reasonTh: String,
+        val reasonRes: Int,
     )
 
     fun retryIntervalMs(consecutiveRefusals: Int, consecutiveHandshakeFailures: Int): Long {
@@ -314,44 +309,44 @@ object ProjectionHarness {
 
     fun evaluateAaConnectStep(input: AaConnectInput): AaConnectJudgment {
         if (!input.running) {
-            return AaConnectJudgment(AaConnectAction.STOP, 0L, "หยุดตัวรับ Android Auto แล้ว")
+            return AaConnectJudgment(AaConnectAction.STOP, 0L, R.string.headunit_stopped)
         }
         if (input.sessionBusy) {
             return AaConnectJudgment(
                 AaConnectAction.HOLD_SESSION_ACTIVE, SESSION_HOLD_POLL_MS,
-                "มีเซสชัน Android Auto อยู่แล้ว — ไม่เปิดซ็อกเก็ต :5277 ซ้อน",
+                R.string.headunit_already_connected,
             )
         }
         if (input.teardownInProgress) {
             return AaConnectJudgment(
                 AaConnectAction.WAIT_SETTLE_COOLDOWN, 100L,
-                "กำลังปิดเซสชันเดิมด้วย ByeBye — รอก่อนต่อ :5277",
+                R.string.headunit_closing,
             )
         }
         val settle = if (input.lastTeardownGraceful) SETTLE_AFTER_BYEBYE_MS else SETTLE_AFTER_UNGRACEFUL_MS
         if (input.msSinceLastTeardown in 0 until settle) {
             return AaConnectJudgment(
                 AaConnectAction.WAIT_SETTLE_COOLDOWN, settle - input.msSinceLastTeardown,
-                "รอเซิร์ฟเวอร์เฮดยูนิตคืนสถานะเซสชันเดิม",
+                R.string.headunit_recovering,
             )
         }
-        if (input.consecutiveRefusals >= 1 && !input.selfModeFallbackTriggered) {
+        if (input.allowSelfModeFallback && input.consecutiveRefusals >= 1 && !input.selfModeFallbackTriggered) {
             return AaConnectJudgment(
                 AaConnectAction.TRIGGER_SELF_MODE_AND_RETRY_5277, 0L,
-                "ไม่พบเซิร์ฟเวอร์ :5277 — เรียก Self-Mode สู่ :5288 และลอง :5277 ต่อ",
+                R.string.headunit_self_mode,
             )
         }
         if (!input.guidanceSurfaced) {
             if (input.consecutiveHandshakeFailures >= HANDSHAKE_FAILURES_BEFORE_GUIDANCE) {
                 return AaConnectJudgment(
                     AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED, 0L,
-                    "เซิร์ฟเวอร์เฮดยูนิต (:5277) ค้าง — ใน Android Auto กด ⋮ → Stop แล้ว Start head unit server",
+                    R.string.headunit_wedged,
                 )
             }
             if (input.consecutiveRefusals >= REFUSALS_BEFORE_GUIDANCE) {
                 return AaConnectJudgment(
                     AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED, 0L,
-                    "เซิร์ฟเวอร์เฮดยูนิต (:5277) ยังไม่เปิด — ใน Android Auto กด ⋮ → Start head unit server",
+                    R.string.headunit_refused,
                 )
             }
         }
@@ -359,10 +354,10 @@ object ProjectionHarness {
         if (input.msSinceLastDial in 0 until interval) {
             return AaConnectJudgment(
                 AaConnectAction.WAIT_SETTLE_COOLDOWN, interval - input.msSinceLastDial,
-                "รอรอบถัดไปก่อนลอง :5277 อีกครั้ง",
+                R.string.headunit_wait_retry,
             )
         }
-        return AaConnectJudgment(AaConnectAction.DIAL_HEADUNIT_5277, 0L, "เชื่อมต่อเซิร์ฟเวอร์เฮดยูนิต :5277")
+        return AaConnectJudgment(AaConnectAction.DIAL_HEADUNIT_5277, 0L, R.string.headunit_connecting)
     }
 
     // =========================================================================
@@ -372,9 +367,53 @@ object ProjectionHarness {
     /** Last outcome of the coordinator's single, real :5277 attempt (published by AaReceiver). */
     enum class HeadunitLinkStatus { UNKNOWN, CONNECTED, REFUSED, HANDSHAKE_FAILED }
 
+    fun evaluateHeadunitHeader(
+        setupComplete: Boolean,
+        sessionRunning: Boolean,
+        headunitLive: Boolean,
+        androidAutoLive: Boolean,
+        headunit: HeadunitLinkStatus,
+        projectionRequested: Boolean = true,
+    ): ServerUiJudgment = when {
+        sessionRunning && headunitLive && !projectionRequested ->
+            ServerUiJudgment(R.string.headunit_header_standby, UiLevel.OK)
+        sessionRunning && headunitLive -> ServerUiJudgment(R.string.headunit_header_ready, UiLevel.OK)
+        !setupComplete && !sessionRunning -> ServerUiJudgment(R.string.headunit_header_setup, UiLevel.WARN)
+        !sessionRunning -> ServerUiJudgment(R.string.headunit_header_unverified, UiLevel.NEUTRAL)
+        androidAutoLive -> ServerUiJudgment(R.string.headunit_header_fallback, UiLevel.WARN)
+        headunit == HeadunitLinkStatus.REFUSED -> ServerUiJudgment(R.string.headunit_header_off, UiLevel.WARN)
+        headunit == HeadunitLinkStatus.HANDSHAKE_FAILED -> ServerUiJudgment(R.string.headunit_header_failed, UiLevel.ERROR)
+        else -> ServerUiJudgment(R.string.headunit_header_checking, UiLevel.BUSY)
+    }
+
     enum class UiLevel { OK, BUSY, WARN, ERROR, NEUTRAL }
 
-    data class ServerUiJudgment(val text: String, val level: UiLevel)
+    data class TftSyncJudgment(
+        val statusRes: Int,
+        val hintRes: Int,
+        val canStop: Boolean,
+    )
+
+    fun evaluateTftSyncUi(phase: Phase, sessionRunning: Boolean, hasSavedBikeWifi: Boolean): TftSyncJudgment {
+        if (!sessionRunning && !hasSavedBikeWifi) {
+            return TftSyncJudgment(R.string.tft_sync_setup, R.string.tft_sync_dashboard_hint, false)
+        }
+        if (phase == Phase.ERROR) {
+            return TftSyncJudgment(R.string.conn_error, R.string.tft_sync_dashboard_hint, sessionRunning)
+        }
+        if (!sessionRunning) {
+            val status = if (phase == Phase.STOPPED) R.string.conn_stopped else R.string.conn_ready
+            return TftSyncJudgment(status, R.string.tft_sync_dashboard_hint, false)
+        }
+        return when (phase) {
+            Phase.STREAMING -> TftSyncJudgment(R.string.tft_sync_sending, R.string.tft_sync_check_display, true)
+            Phase.RECONNECTING, Phase.WAITING_FOR_BIKE ->
+                TftSyncJudgment(phase.labelRes, R.string.tft_sync_wait_hint, true)
+            else -> TftSyncJudgment(R.string.tft_sync_connecting, R.string.tft_sync_wait_hint, true)
+        }
+    }
+
+    data class ServerUiJudgment(val textRes: Int, val level: UiLevel)
 
     fun evaluateServerStatusUi(
         sessionRunning: Boolean,
@@ -384,25 +423,25 @@ object ProjectionHarness {
         headunit: HeadunitLinkStatus,
     ): ServerUiJudgment {
         if (sessionRunning && (decoding || fps > 0)) {
-            return ServerUiJudgment("● สตรีม Android Auto กำลังทำงานสด", UiLevel.OK)
+            return ServerUiJudgment(R.string.headunit_live_badge, UiLevel.OK)
         }
         if (sessionRunning && handshakeLive) {
-            return ServerUiJudgment("● เชื่อม Android Auto แล้ว — รอภาพแรก", UiLevel.OK)
+            return ServerUiJudgment(R.string.headunit_first_frame, UiLevel.OK)
         }
         return when (headunit) {
             HeadunitLinkStatus.REFUSED -> ServerUiJudgment(
-                if (sessionRunning) "● เซิร์ฟเวอร์เฮดยูนิต (:5277) ยังไม่เปิด — แตะเพื่อเปิดตั้งค่า Android Auto"
-                else "● รอบก่อนไม่พบเซิร์ฟเวอร์เฮดยูนิต (:5277) — แตะเพื่อเปิดตั้งค่า Android Auto",
+                if (sessionRunning) R.string.headunit_refused_badge
+                else R.string.headunit_prev_refused_badge,
                 UiLevel.WARN,
             )
             HeadunitLinkStatus.HANDSHAKE_FAILED -> ServerUiJudgment(
-                "● เซิร์ฟเวอร์เฮดยูนิต (:5277) ค้าง — แตะเพื่อรีเซ็ตในตั้งค่า Android Auto",
+                R.string.headunit_wedged_badge,
                 UiLevel.ERROR,
             )
             else -> if (sessionRunning) {
-                ServerUiJudgment("● กำลังเชื่อมต่อ Android Auto / รถ", UiLevel.BUSY)
+                ServerUiJudgment(R.string.headunit_connecting_badge, UiLevel.BUSY)
             } else {
-                ServerUiJudgment("● สแตนด์บาย — ตรวจ :5277 อัตโนมัติเมื่อกดเริ่มเชื่อมต่อ", UiLevel.NEUTRAL)
+                ServerUiJudgment(R.string.headunit_standby_badge, UiLevel.NEUTRAL)
             }
         }
     }

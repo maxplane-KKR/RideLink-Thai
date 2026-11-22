@@ -29,16 +29,61 @@ class SessionService : Service() {
 
     companion object {
         const val ACTION_START = "app.ridelink.thai.ACTION_START"
+        const val ACTION_PREPARE_HEADUNIT = "app.ridelink.thai.ACTION_PREPARE_HEADUNIT"
         const val ACTION_STOP = "app.ridelink.thai.ACTION_STOP"
+        const val ACTION_STOP_PROJECTION = "app.ridelink.thai.ACTION_STOP_PROJECTION"
+        const val ACTION_LIVE_DASHBOARD = "app.ridelink.thai.ACTION_LIVE_DASHBOARD"
+        const val EXTRA_LIVE_ATTEMPT = "app.ridelink.thai.EXTRA_LIVE_ATTEMPT"
+        const val EXTRA_CONNECT_REQUESTED_AT = "app.ridelink.thai.EXTRA_CONNECT_REQUESTED_AT"
         private const val CHANNEL_ID = "ridelink_service_channel"
         private const val NOTIFICATION_ID = 2026
+        private const val HIDDEN_STANDBY_TIMEOUT_MS = 15_000L
 
         @Volatile
         var isRunning: Boolean = false
             private set
+
+        @Volatile var isProjectionRequested: Boolean = false
+            private set
+
+        // Activity และ Service ใช้ main thread เดียวกัน ไม่เก็บ Activity ไว้ใน Service
+        private var visibleActivities = 0
+        private var activeService: SessionService? = null
+        private var standbyStoppedInBackground = false
+
+        internal fun onActivityStarted() {
+            visibleActivities++
+            activeService?.updateStandbyTimeout()
+        }
+
+        internal fun onActivityStopped() {
+            visibleActivities = (visibleActivities - 1).coerceAtLeast(0)
+            activeService?.updateStandbyTimeout()
+        }
+
+        internal fun consumeStandbyRestart(): Boolean {
+            val restart = standbyStoppedInBackground
+            standbyStoppedInBackground = false
+            return restart
+        }
     }
 
+    private data class SessionConfiguration(
+        val qr: QrData?,
+        val profile: BikeProfile,
+        val video: AaVideoSpec,
+        val dpi: Int?,
+        val margins: AaMargins,
+    )
+
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val standbyTimeout = Runnable {
+        if (SessionStartPolicy.stopHiddenStandby(isRunning, isProjectionRequested, visibleActivities > 0)) {
+            standbyStoppedInBackground = true
+            LogBus.log("[Session] แอปอยู่เบื้องหลังครบ 15 วินาที — หยุด Head Unit สแตนด์บาย")
+            stopSession()
+        }
+    }
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var pipeline: VideoPipeline? = null
@@ -46,24 +91,16 @@ class SessionService : Service() {
     private var prober: EasyConnProber? = null
     private var bikeNetwork: Network? = null
     private var proberActiveNetwork: Network? = null
-    private var sessionStartedAtElapsed: Long = 0L
+    private var bikeConnectionStartedAtElapsed: Long? = null
     private var sessionGeneration: Int = 0
-    private var pxcRetryScheduled = false
-
-    private fun schedulePxcRetry(gen: Int, delayMs: Long) {
-        if (gen != sessionGeneration || !isRunning || pxcRetryScheduled) return
-        pxcRetryScheduled = true
-        mainHandler.postDelayed({
-            pxcRetryScheduled = false
-            if (gen == sessionGeneration && isRunning) {
-                maybeHandoffToPxc(gen)
-            }
-        }, delayMs)
-    }
-
-    private fun stopPxcWatchdog() {
-        pxcRetryScheduled = false
-    }
+    private var proberGeneration = 0
+    private var encoderCleanupGeneration = 0
+    private val bikeCallbacks = BikeProjectionCallbacks(
+        post = { mainHandler.post(it) },
+        postDelayed = { task, delayMs -> mainHandler.postDelayed(task, delayMs) },
+        remove = { mainHandler.removeCallbacks(it) },
+    )
+    private var currentConfiguration: SessionConfiguration? = null
 
     /**
      * Checks if the device is already associated with the bike's Wi-Fi hotspot or has a valid bike route/gateway.
@@ -125,23 +162,91 @@ class SessionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeService = this
         createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: ACTION_START
         if (action == ACTION_STOP) {
-            stopSession(manual = true)
+            standbyStoppedInBackground = false
+            stopSession()
+            return START_NOT_STICKY
+        }
+        if (action == ACTION_STOP_PROJECTION) {
+            stopProjectionSync()
+            updateStandbyTimeout()
             return START_NOT_STICKY
         }
 
-        startSession()
+        if (action == ACTION_LIVE_DASHBOARD) {
+            val attemptId = intent?.getLongExtra(EXTRA_LIVE_ATTEMPT, 0L)?.takeIf { it > 0 }
+                ?: LiveDashboardLogAttempt.newId()
+            val attempt = LiveDashboardLogAttempt(attemptId, TftDiagnostics::recordLiveDashboard)
+            attempt.event(LiveDashboardEvent.SERVICE_RECEIVED)
+            if (!isRunning || !isProjectionRequested) {
+                attempt.event(LiveDashboardEvent.SERVICE_NOT_READY)
+                stopSelfResult(startId)
+                return START_NOT_STICKY
+            }
+            if (!RideScreenLiveDashboard.active) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                    checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    runCatching {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            buildNotification(localizedString(R.string.ridescreen_live_notification)),
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+                        )
+                    }.onFailure { LogBus.log("[Session] GPS foreground unavailable: ${it.javaClass.simpleName}") }
+                }
+                RideScreenLiveDashboard.start(this, attemptId)
+            } else {
+                attempt.event(LiveDashboardEvent.ALREADY_ACTIVE)
+            }
+            return START_STICKY
+        }
+
+        if (action == ACTION_PREPARE_HEADUNIT) {
+            standbyStoppedInBackground = false
+            if (!isRunning) startSession(projectionRequested = false)
+            updateStandbyTimeout()
+            return START_NOT_STICKY
+        }
+        standbyStoppedInBackground = false
+        encoderCleanupGeneration++
+        val now = SystemClock.elapsedRealtime()
+        val requestedAt = intent?.getLongExtra(EXTRA_CONNECT_REQUESTED_AT, now)
+            ?.takeIf { it in 0..now && now - it <= 60_000L } ?: now
+        startSession(projectionRequested = true, requestedAtMs = requestedAt)
+        updateStandbyTimeout()
         return START_STICKY
     }
 
-    private fun startSession() {
+    private fun updateStandbyTimeout() {
+        mainHandler.removeCallbacks(standbyTimeout)
+        if (SessionStartPolicy.stopHiddenStandby(isRunning, isProjectionRequested, visibleActivities > 0)) {
+            mainHandler.postDelayed(standbyTimeout, HIDDEN_STANDBY_TIMEOUT_MS)
+        }
+    }
+
+    private fun sessionConfiguration(qr: QrData?): SessionConfiguration {
+        ProfilePrefs.applyToHolder(this)
+        val profile = BikeProfiles.selectByQr(qr, this)
+        val video = VideoPrefs.resolutionOverride(this, profile)
+            ?: DashMemory.specFor(this, qr?.ssid, profile)
+            ?: profile.aaVideo
+        val dpi = VideoPrefs.dpiOverride(this)
+        val effectiveVideo = if (dpi == null || dpi == video.dpi) video else AaVideoSpec(video.resolution, dpi)
+        val margins = VideoPrefs.aaMarginsFor(this, effectiveVideo, qr?.ssid, profile.panelSize)
+        return SessionConfiguration(qr, profile, video, dpi, margins)
+    }
+
+    private fun ensureForeground(projectionRequested: Boolean) {
         // Always ensure Foreground notification is posted within Android's 5-second FGS deadline
-        val notification = buildNotification("กำลังเริ่มการฉายภาพ Android Auto...")
+        val notification = buildNotification(localizedString(
+            if (projectionRequested) R.string.projection_starting else R.string.headunit_header_checking,
+        ))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -151,39 +256,72 @@ class SessionService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+    }
 
-        // Fix Bug #1 ("ต่อได้ครั้งเดียว พอครั้งต่อไปไม่ทำงาน"):
-        // Never silently return if a previous session was still flagged running or half-alive.
-        // Tear down sockets, unbind stale process network, reset session flags, and start clean.
-        if (isRunning || receiver != null || prober != null || pipeline != null) {
-            LogBus.log("[Session] รีเซ็ตเซสชันเดิมเพื่อเริ่มการเชื่อมต่อรอบใหม่อย่างสะอาด")
-            teardownCore()
-        }
-
-        isRunning = true
-        val gen = ++sessionGeneration
-        sessionStartedAtElapsed = SystemClock.elapsedRealtime()
-        BikeAutoWatcher.onManualStartOrSessionActive()
-        BikeWifi.unbindProcess(context = this)
-        AaVideoBridge.resetSessionState()
-        acquireLocks()
-
+    private fun startSession(
+        projectionRequested: Boolean,
+        requestedAtMs: Long = SystemClock.elapsedRealtime(),
+    ) {
+        if (!isRunning) ensureForeground(projectionRequested)
         try {
-            // Load user calibration settings (4-edge Zontes template margins, scale %, manual DPI)
             ScreenMargins.load(this)
-            ProfilePrefs.applyToHolder(this)
-            BikeProfileHolder.aaDpiOverride = VideoPrefs.dpiOverride(this)
-
             val savedBike = BikeMemory.selected(this)
             val qr = savedBike?.qr
-            val bikeName = savedBike?.name ?: "จอรถ"
+            val bikeName = savedBike?.name
+            val config = sessionConfiguration(qr)
+            val standbyReceiver = receiver
+            val decision = SessionStartPolicy.decide(
+                requested = projectionRequested,
+                running = isRunning,
+                projecting = isProjectionRequested,
+                receiverReady = standbyReceiver != null,
+                sameConfiguration = currentConfiguration == config,
+                error = ConnectionState.phase == Phase.ERROR,
+                wifiPickerError = ConnectionState.detail.isResource(R.string.conn_detail_wifi_picker),
+            )
+            if (decision == SessionStartPolicy.Action.REUSE_PROJECTION) {
+                TftDiagnostics.markConnectionStartup(ConnectionStartupStage.REPEAT_REQUEST, requestedAtMs)
+                if (BikeWifi.retryPendingJoinNow()) {
+                    LogBus.log("[Session] มีคำขอเชื่อมซ้ำ — เริ่มลอง Wi-Fi ที่รออยู่ทันที")
+                } else {
+                    LogBus.log("[Session] มีคำขอเชื่อมซ้ำ — รอการเชื่อมต่อเดิมโดยไม่เริ่มใหม่")
+                }
+                return
+            }
+            if (isRunning) ensureForeground(projectionRequested)
+            if (decision == SessionStartPolicy.Action.PROMOTE_STANDBY) {
+                TftDiagnostics.beginConnectionStartup(requestedAtMs)
+                isProjectionRequested = true
+                checkNotNull(standbyReceiver).allowSelfModeRecovery = true
+                acquireLocks()
+                publishProjectionStarting(bikeName, config.profile.panelSize ?: (config.video.width to config.video.height))
+                if (AaVideoBridge.headunitSessionLive) {
+                    TftDiagnostics.markConnectionStartup(ConnectionStartupStage.HEADUNIT_READY)
+                }
+                startBikeConnection(sessionGeneration, qr)
+                return
+            }
 
-            val profile = BikeProfiles.selectByQr(qr, this)
+            // Restart with the negotiated profile if the rider selected a different bike or changed settings.
+            if (isRunning || receiver != null || prober != null || pipeline != null) {
+                LogBus.log("[Session] รีเซ็ตเซสชันเดิมเพื่อเริ่มการเชื่อมต่อรอบใหม่อย่างสะอาด")
+                teardownCore()
+            }
+            if (projectionRequested) TftDiagnostics.beginConnectionStartup(requestedAtMs)
+            isProjectionRequested = projectionRequested
+            isRunning = true
+            val gen = ++sessionGeneration
+            currentConfiguration = config
+            BikeWifi.unbindProcess(context = this)
+            AaVideoBridge.resetSessionState()
+            AaVideoBridge.headunitStatus = ProjectionHarness.HeadunitLinkStatus.UNKNOWN
+            if (projectionRequested) acquireLocks()
+
+            val profile = config.profile
             BikeProfileHolder.active = profile
-            BikeProfileHolder.aaVideoOverride = VideoPrefs.resolutionOverride(this, profile)
-                ?: DashMemory.specFor(this, qr?.ssid, profile)
-                ?: profile.aaVideo
-            BikeProfileHolder.aaContentMargins = VideoPrefs.aaMarginsFor(this, BikeProfileHolder.aaVideo, qr?.ssid)
+            BikeProfileHolder.aaVideoOverride = config.video
+            BikeProfileHolder.aaDpiOverride = config.dpi
+            BikeProfileHolder.aaContentMargins = config.margins
 
             val panel = profile.panelSize ?: (BikeProfileHolder.aaVideo.width to BikeProfileHolder.aaVideo.height)
             LogBus.log(
@@ -204,25 +342,19 @@ class SessionService : Service() {
             }
             AaVideoBridge.pipeline = pipeline
             AaVideoBridge.reattachActivePreview()
+            RideScreenLiveDashboard.reattach(this)
 
             // 2. Register steady-video callback so PXC binds process network AFTER AA loopback connects
             AaVideoBridge.onSteadyVideo = {
                 mainHandler.post {
-                    if (gen == sessionGeneration && isRunning) {
+                    if (gen == sessionGeneration && isRunning && isProjectionRequested) {
                         LogBus.log("[Session] AA ภาพสดนิ่งแล้ว — ส่งต่อสตรีมไปยังหน้าจอรถ (PXC)")
-                        maybeHandoffToPxc(gen)
+                        bikeCallbacks.current?.let(::maybeHandoffToPxc)
                     }
                 }
             }
 
-            // Safety fallback timer: hand off to PXC after LOOPBACK_GRACE_MS even if AA takes longer
-            mainHandler.postDelayed({
-                if (gen == sessionGeneration && isRunning) {
-                    maybeHandoffToPxc(gen)
-                }
-            }, ProjectionHarness.LOOPBACK_GRACE_MS + 150L)
-
-            // 3. Start Android Auto Receiver (:5288 bound synchronously BEFORE AaSelfMode pokes gearhead!)
+            // 3. Verify the head unit before requesting the bike network.
             val decoderSurface = pipeline?.decoderInputSurface() ?: pipeline?.encoderInputSurface()
             if (decoderSurface != null) {
                 receiver = AaReceiver(
@@ -230,31 +362,48 @@ class SessionService : Service() {
                     encoderSurface = decoderSurface,
                     log = { LogBus.log("[AA] $it") }
                 ).apply {
+                    allowSelfModeRecovery = projectionRequested
                     onSessionEnded = { userExit ->
                         if (userExit) {
                             LogBus.log("[Session] ผู้ใช้กดออกจาก Android Auto — หยุดเซสชัน")
-                            mainHandler.post { stopSession(manual = false) }
+                            mainHandler.post {
+                                if (gen == sessionGeneration && isRunning) stopSession()
+                            }
                         } else {
                             // Temporary AA drop: the receiver's coordinator redials :5277 after the
                             // settle window and keeps :5288 open — no manual Stop → Connect needed.
                             LogBus.log("[Session] AA ตัดการเชื่อมต่อชั่วคราว — กำลังต่อ :5277 / :5288 ใหม่อัตโนมัติ")
                             mainHandler.post {
-                                if (isRunning && receiver != null) {
-                                    ConnectionState.set(Phase.STARTING_AA, "AA หลุดชั่วคราว — กำลังต่อใหม่อัตโนมัติ")
+                                if (gen == sessionGeneration && isRunning) {
+                                    val phase = if (isProjectionRequested) Phase.STARTING_AA else Phase.IDLE
+                                    ConnectionState.set(phase, R.string.aa_auto_retry)
                                 }
                             }
                         }
                     }
-                    onHeadunitGuidance = { reasonTh ->
+                    onHeadunitGuidance = { reasonRes ->
                         mainHandler.post {
-                            if (isRunning && receiver != null && !AaVideoBridge.aaSessionLive) {
-                                ConnectionState.set(Phase.STARTING_AA, reasonTh)
+                            if (gen == sessionGeneration && isRunning && !AaVideoBridge.aaSessionLive) {
+                                val phase = if (isProjectionRequested) Phase.STARTING_AA else Phase.IDLE
+                                ConnectionState.set(phase, reasonRes)
+                            }
+                        }
+                    }
+                    onHeadunitConnected = {
+                        mainHandler.post {
+                            if (gen != sessionGeneration || !isRunning || !AaVideoBridge.headunitSessionLive) return@post
+                            if (isProjectionRequested) {
+                                TftDiagnostics.markConnectionStartup(ConnectionStartupStage.HEADUNIT_READY)
+                                startBikeConnection(gen, qr)
+                            } else {
+                                ConnectionState.set(Phase.IDLE, R.string.headunit_header_standby)
+                                updateNotification(localizedString(R.string.headunit_header_standby))
                             }
                         }
                     }
                     onNeedSelfModeFallback = {
                         mainHandler.post {
-                            if (isRunning && receiver != null) {
+                            if (gen == sessionGeneration && isRunning && isProjectionRequested) {
                                 LogBus.log("[AA] ส่ง Intent/Broadcast เริ่ม Wireless Self-Mode สู่ :5288")
                                 AaSelfMode.trigger(this@SessionService) { LogBus.log(it) }
                             }
@@ -262,59 +411,84 @@ class SessionService : Service() {
                     }
                     start()
                 }
+            } else {
+                error("Android Auto decoder surface is unavailable")
             }
 
-            // 4. Join Bike Wi-Fi (deferring PXC process bind until ProjectionHarness approves handoff)
-            val maskedLabel = ProjectionHarness.maskIdentifier(
-                bikeName,
-                AutoConnectPrefs.isPrivacyMasked(this)
-            )
-            ConnectionState.set(Phase.STARTING_AA, "$bikeName (${panel.first}×${panel.second})")
+            // A successful :5277 handshake starts the bike Wi-Fi step.
+            if (!projectionRequested) {
+                ConnectionState.set(Phase.IDLE, R.string.headunit_header_checking)
+            } else {
+                publishProjectionStarting(bikeName, panel)
+            }
+        } catch (e: Exception) {
+            LogBus.log("[Session] startSession error: $e")
+            stopSession()
+            ConnectionState.set(Phase.ERROR, e.message)
+        }
+    }
 
-            // Check immediately if device is already connected to bike Wi-Fi (manual connect / system auto-join)
+    private fun publishProjectionStarting(bikeName: String?, panel: Pair<Int, Int>) {
+        val maskedLabel = bikeName?.let {
+            ProjectionHarness.maskIdentifier(it, masked = AutoConnectPrefs.isPrivacyMasked(this))
+        } ?: localizedString(R.string.bike_screen_name)
+        if (bikeName == null) {
+            ConnectionState.set(Phase.STARTING_AA, R.string.bike_screen_dimensions, panel.first, panel.second)
+        } else {
+            ConnectionState.set(Phase.STARTING_AA, "$maskedLabel (${panel.first}×${panel.second})")
+        }
+        updateNotification(localizedString(R.string.projection_active, maskedLabel, panel.first, panel.second))
+    }
+
+    private fun startBikeConnection(gen: Int, qr: QrData?) {
+        if (gen != sessionGeneration || !isRunning || !isProjectionRequested ||
+            bikeConnectionStartedAtElapsed != null || !AaVideoBridge.headunitSessionLive
+        ) return
+        val attempt = bikeCallbacks.begin()
+        bikeConnectionStartedAtElapsed = SystemClock.elapsedRealtime()
+        TftDiagnostics.recordBikeConnectionStart(qr?.modelId)
+        try {
             val preExisting = findActiveBikeNetwork(qr?.ssid)
             if (preExisting != null) {
                 LogBus.log("[Session] ตรวจพบ Wi-Fi รถเชื่อมต่ออยู่แล้ว: $preExisting")
                 bikeNetwork = preExisting
-                maybeHandoffToPxc(gen)
             }
 
             if (qr != null) {
+                TftDiagnostics.markConnectionStartup(ConnectionStartupStage.WIFI_REQUESTED)
                 BikeWifi.join(
                     context = this,
                     ssid = qr.ssid,
                     psk = qr.pwd,
                     onAvailable = { net ->
-                        mainHandler.post {
-                            if (gen != sessionGeneration || !isRunning) return@post
+                        bikeCallbacks.dispatch(attempt) {
+                            TftDiagnostics.markConnectionStartup(ConnectionStartupStage.WIFI_AVAILABLE)
                             val isNewNet = bikeNetwork != net
                             bikeNetwork = net
                             if (isNewNet && proberActiveNetwork != null && proberActiveNetwork != net) {
                                 // Re-acquired a fresh Wi-Fi Network mid-ride -> force PXC re-probe
                                 proberActiveNetwork = null
                             }
-                            maybeHandoffToPxc(gen)
+                            maybeHandoffToPxc(attempt)
                         }
                     },
                     onLost = {
-                        mainHandler.post {
-                            if (gen != sessionGeneration || !isRunning) return@post
+                        bikeCallbacks.dispatch(attempt) {
                             bikeNetwork = null
                             proberActiveNetwork = null
-                            ConnectionState.set(Phase.RECONNECTING, "สัญญาณ Wi-Fi รถหลุด กำลังต่อใหม่อัตโนมัติ...")
+                            ConnectionState.set(Phase.RECONNECTING, R.string.wifi_auto_retry)
                         }
                     },
+                    publishProjectionState = { update -> bikeCallbacks.dispatch(attempt, update) },
                     log = { LogBus.log("[WiFi] $it") }
                 )
             } else {
                 val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                bikeNetwork = cm.activeNetwork
-                maybeHandoffToPxc(gen)
+                if (bikeNetwork == null) bikeNetwork = cm.activeNetwork
             }
-
-            updateNotification("กำลังฉายภาพ Android Auto สู่ $maskedLabel (${panel.first}×${panel.second})")
+            maybeHandoffToPxc(attempt)
         } catch (e: Exception) {
-            LogBus.log("[Session] startSession error: $e")
+            LogBus.log("[Session] startBikeConnection error: $e")
             ConnectionState.set(Phase.ERROR, e.message)
         }
     }
@@ -323,8 +497,9 @@ class SessionService : Service() {
      * Consults [ProjectionHarness.evaluatePxcHandoff] before calling [startProber] so `127.0.0.1`
      * loopback AA startup is never severed by an instant pre-approved Wi-Fi join on 2nd+ connects.
      */
-    private fun maybeHandoffToPxc(gen: Int) {
-        if (gen != sessionGeneration || !isRunning) return
+    private fun maybeHandoffToPxc(attempt: BikeProjectionCallbacks.Attempt) {
+        if (!bikeCallbacks.isCurrent(attempt) || !isRunning || !isProjectionRequested) return
+        val bikeStartedAt = bikeConnectionStartedAtElapsed ?: return
 
         // If bikeNetwork is null, check active Wi-Fi in background (watchdog polling)
         if (bikeNetwork == null) {
@@ -337,7 +512,7 @@ class SessionService : Service() {
         }
 
         val net = bikeNetwork
-        val elapsed = SystemClock.elapsedRealtime() - sessionStartedAtElapsed
+        val elapsed = SystemClock.elapsedRealtime() - bikeStartedAt
         val decision = ProjectionHarness.evaluatePxcHandoff(
             hasBikeNetwork = net != null,
             proberActiveOnSameNetwork = net != null && net == proberActiveNetwork && prober != null,
@@ -347,29 +522,39 @@ class SessionService : Service() {
 
         when (decision) {
             ProjectionHarness.HandoffDecision.START_PXC_NOW -> {
-                stopPxcWatchdog()
+                bikeCallbacks.cancelRetry()
                 proberActiveNetwork = net
-                startProber(net)
+                TftDiagnostics.markConnectionStartup(ConnectionStartupStage.PXC_STARTED)
+                startProber(net, attempt)
             }
             ProjectionHarness.HandoffDecision.DEFER_FOR_AA_LOOPBACK -> {
                 val remain = (ProjectionHarness.LOOPBACK_GRACE_MS - elapsed).coerceAtLeast(250L)
                 LogBus.log("[Harness] รอ AA เชื่อมต่อ Loopback :5288 ก่อนผูก Wi-Fi รถ (เหลือเวลา ${remain}ms)")
-                schedulePxcRetry(gen, remain + 50L)
+                bikeCallbacks.scheduleRetry(attempt, remain + 50L) { maybeHandoffToPxc(attempt) }
             }
             ProjectionHarness.HandoffDecision.WAIT_FOR_WIFI -> {
                 // Poll every 1.5s until bike Wi-Fi appears instead of dropping into a dead black hole
-                schedulePxcRetry(gen, 1500L)
+                bikeCallbacks.scheduleRetry(attempt, 1500L) { maybeHandoffToPxc(attempt) }
             }
             ProjectionHarness.HandoffDecision.ALREADY_ACTIVE -> {
-                stopPxcWatchdog()
+                bikeCallbacks.cancelRetry()
             }
         }
     }
 
-    private fun startProber(network: Network?) {
+    private fun startProber(network: Network?, attempt: BikeProjectionCallbacks.Attempt) {
+        val generation = ++proberGeneration
         try {
             prober?.stop()
-            prober = EasyConnProber(this) { LogBus.log("[PXC] $it") }.apply {
+            prober = EasyConnProber(
+                context = this,
+                publishProjectionState = { update ->
+                    bikeCallbacks.dispatch(attempt) {
+                        if (generation == proberGeneration) update()
+                    }
+                },
+                log = { LogBus.log("[PXC] $it") },
+            ).apply {
                 start(network)
             }
         } catch (e: Exception) {
@@ -377,16 +562,32 @@ class SessionService : Service() {
         }
     }
 
-    private fun teardownCore() {
-        stopPxcWatchdog()
-        mainHandler.removeCallbacksAndMessages(null)
+    private fun stopBikeProjection(): EasyConnProber? {
+        encoderCleanupGeneration++
+        bikeCallbacks.end()
+        TftDiagnostics.stopConnectionStartup()
         bikeNetwork = null
         proberActiveNetwork = null
+        bikeConnectionStartedAtElapsed = null
+
+        val stoppedProber = prober
+        try {
+            stoppedProber?.stop()
+        } catch (_: Exception) {}
+        prober = null
 
         try {
-            prober?.stop()
-            prober = null
+            BikeWifi.leave(this) { LogBus.log("[WiFi] $it") }
         } catch (_: Exception) {}
+        BikeWifi.unbindProcess(context = this)
+        releaseLocks()
+        return stoppedProber
+    }
+
+    private fun teardownCore() {
+        stopBikeProjection()
+        mainHandler.removeCallbacksAndMessages(null)
+        currentConfiguration = null
 
         try {
             receiver?.stop()
@@ -399,23 +600,56 @@ class SessionService : Service() {
             AaVideoBridge.pipeline = null
         } catch (_: Exception) {}
 
-        try {
-            BikeWifi.leave(this) { LogBus.log("[WiFi] $it") }
-        } catch (_: Exception) {}
-
-        BikeWifi.unbindProcess(context = this)
         AaVideoBridge.resetSessionState()
-        releaseLocks()
     }
 
-    private fun stopSession(manual: Boolean) {
-        isRunning = false
-        sessionGeneration++
-        teardownCore()
-        ConnectionState.set(Phase.STOPPED)
-        if (!manual) {
-            BikeAutoWatcher.onSessionStoppedNaturally(this)
+    private fun stopProjectionSync() {
+        val reusableHeadunit = isRunning && receiver != null && pipeline != null &&
+            currentConfiguration != null && AaVideoBridge.headunitSessionLive
+        if (!SessionStartPolicy.keepHeadunitAfterSyncStop(isProjectionRequested, reusableHeadunit)) {
+            stopSession()
+            return
         }
+        isProjectionRequested = false
+        receiver?.allowSelfModeRecovery = false
+        AaSelfMode.cancel()
+        RideScreenLiveDashboard.stop(this)
+        val stoppedProber = stopBikeProjection()
+        ConnectionState.set(Phase.IDLE, R.string.headunit_header_standby)
+        updateNotification(localizedString(R.string.headunit_header_standby))
+        LogBus.log("[Session] หยุดซิงค์จอรถ · Head Unit ยังสแตนด์บาย")
+        pipeline?.let { releaseStoppedBikeEncoder(stoppedProber, it, sessionGeneration, encoderCleanupGeneration, 12) }
+    }
+
+    private fun releaseStoppedBikeEncoder(
+        stoppedProber: EasyConnProber?, target: VideoPipeline, generation: Int, cleanupGeneration: Int, retries: Int,
+    ) {
+        if (!isRunning || isProjectionRequested || generation != sessionGeneration ||
+            cleanupGeneration != encoderCleanupGeneration || pipeline !== target) return
+        if (stoppedProber?.isVideoConfigIdle() != false) {
+            if (!target.releaseBikeEncoder()) {
+                LogBus.log("[Session] ปล่อย encoder ไม่สำเร็จ — หยุดเซสชันทั้งหมด")
+                stopSession()
+            }
+            return
+        }
+        if (retries <= 0) {
+            LogBus.log("[Session] ปล่อย encoder ไม่สำเร็จ — หยุดเซสชันทั้งหมด")
+            stopSession()
+            return
+        }
+        mainHandler.postDelayed({
+            releaseStoppedBikeEncoder(stoppedProber, target, generation, cleanupGeneration, retries - 1)
+        }, 250L)
+    }
+
+    private fun stopSession() {
+        isRunning = false
+        isProjectionRequested = false
+        sessionGeneration++
+        RideScreenLiveDashboard.stop(this)
+        teardownCore()
+        ConnectionState.set(Phase.STOPPED, "")
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -450,10 +684,13 @@ class SessionService : Service() {
         } catch (_: Exception) {}
     }
 
+    private fun localizedString(id: Int, vararg args: Any): String =
+        androidx.core.content.ContextCompat.getContextForLanguage(this).getString(id, *args)
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "RideLink บริการฉายภาพ"
-            val descriptionText = "การเชื่อมต่อ Android Auto สู่จอหน้าปัดรถยนต์และมอเตอร์ไซค์"
+            val name = localizedString(R.string.projection_channel)
+            val descriptionText = localizedString(R.string.projection_channel_desc)
             val importance = NotificationManager.IMPORTANCE_LOW
             val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
                 description = descriptionText
@@ -482,11 +719,12 @@ class SessionService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("RideLink TH")
+            .setContentTitle(localizedString(R.string.app_name))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(statusText))
             .setContentText(statusText)
             .setSmallIcon(R.drawable.ic_play_vector)
             .setContentIntent(pendingIntent)
-            .addAction(R.drawable.ic_stop_vector, "หยุดเชื่อมต่อ", stopPendingIntent)
+            .addAction(R.drawable.ic_stop_vector, localizedString(R.string.headunit_stop_all), stopPendingIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -498,8 +736,10 @@ class SessionService : Service() {
     }
 
     override fun onDestroy() {
+        if (activeService === this) activeService = null
+        mainHandler.removeCallbacks(standbyTimeout)
         if (isRunning) {
-            stopSession(manual = false)
+            stopSession()
         }
         super.onDestroy()
     }

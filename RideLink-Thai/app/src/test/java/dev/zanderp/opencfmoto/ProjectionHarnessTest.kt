@@ -8,6 +8,50 @@ import org.junit.Test
 class ProjectionHarnessTest {
 
     @Test
+    fun `TFT directs the user to the dashboard before connecting`() {
+        val setup = ProjectionHarness.evaluateTftSyncUi(Phase.IDLE, sessionRunning = false, hasSavedBikeWifi = false)
+        assertEquals(R.string.tft_sync_setup, setup.statusRes)
+        assertEquals(R.string.tft_sync_dashboard_hint, setup.hintRes)
+        assertFalse(setup.canStop)
+
+        val ready = ProjectionHarness.evaluateTftSyncUi(Phase.IDLE, sessionRunning = false, hasSavedBikeWifi = true)
+        assertEquals(R.string.conn_ready, ready.statusRes)
+        assertEquals(R.string.tft_sync_dashboard_hint, ready.hintRes)
+        assertFalse(ready.canStop)
+    }
+
+    @Test
+    fun `TFT shows stop but does not claim video is sent when only Android Auto is ready`() {
+        val waiting = ProjectionHarness.evaluateTftSyncUi(Phase.AA_VIDEO_LIVE, sessionRunning = true, hasSavedBikeWifi = true)
+        assertEquals(R.string.tft_sync_connecting, waiting.statusRes)
+        assertTrue(waiting.canStop)
+
+        val sending = ProjectionHarness.evaluateTftSyncUi(Phase.STREAMING, sessionRunning = true, hasSavedBikeWifi = true)
+        assertEquals(R.string.tft_sync_sending, sending.statusRes)
+        assertTrue(sending.canStop)
+    }
+
+    @Test
+    fun `TFT lets an active sync stop and directs retries to the dashboard`() {
+        val reconnecting = ProjectionHarness.evaluateTftSyncUi(Phase.RECONNECTING, sessionRunning = true, hasSavedBikeWifi = true)
+        assertEquals(R.string.conn_reconnecting, reconnecting.statusRes)
+        assertTrue(reconnecting.canStop)
+
+        val failed = ProjectionHarness.evaluateTftSyncUi(Phase.ERROR, sessionRunning = true, hasSavedBikeWifi = true)
+        assertEquals(R.string.conn_error, failed.statusRes)
+        assertEquals(R.string.tft_sync_dashboard_hint, failed.hintRes)
+        assertTrue(failed.canStop)
+    }
+
+    @Test
+    fun `TFT directs reconnecting from the dashboard after a stop`() {
+        val stopped = ProjectionHarness.evaluateTftSyncUi(Phase.STOPPED, sessionRunning = false, hasSavedBikeWifi = true)
+        assertEquals(R.string.conn_stopped, stopped.statusRes)
+        assertEquals(R.string.tft_sync_dashboard_hint, stopped.hintRes)
+        assertFalse(stopped.canStop)
+    }
+
+    @Test
     fun `normal BT ride without QR menu stays in standby and does NOT launch AA`() {
         val judgment = ProjectionHarness.evaluateAutoTrigger(
             ProjectionHarness.AutoTriggerInput(
@@ -21,7 +65,6 @@ class ProjectionHarnessTest {
             )
         )
         assertEquals(ProjectionHarness.TriggerDecision.ARM_WIFI_WATCHER_ONLY, judgment.decision)
-        assertTrue(judgment.shouldKeepPassiveWifiRequest)
     }
 
     @Test
@@ -38,7 +81,6 @@ class ProjectionHarnessTest {
             )
         )
         assertEquals(ProjectionHarness.TriggerDecision.FIRE_PROJECTION, judgment.decision)
-        assertFalse(judgment.shouldKeepPassiveWifiRequest)
     }
 
     @Test

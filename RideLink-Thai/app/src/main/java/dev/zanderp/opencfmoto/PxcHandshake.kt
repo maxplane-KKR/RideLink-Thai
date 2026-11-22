@@ -2,7 +2,9 @@ package dev.zanderp.opencfmoto
 
 import org.json.JSONObject
 import java.net.Socket
+import java.util.Collections
 import java.util.UUID
+import java.util.WeakHashMap
 
 /**
  * Server-side PXC control dispatcher. The phone is the SERVER: after we send the
@@ -25,6 +27,7 @@ class PxcHandshake(
         private set
     @Volatile var lastClientInfo: JSONObject? = null
         private set
+    @Volatile internal var projectionVersions: ConnectionState.ProjectionVersions? = null
     /** Dashboard-variant strategy, selected from the bike's CLIENT_INFO. Read by the media plane too
      *  (via EasyConnProber.handshake.profile). Written once on the control thread, before any media
      *  socket exists. */
@@ -34,6 +37,8 @@ class PxcHandshake(
     @Volatile private var lastHuTimeSyncLogAt: Long = 0L
     @Volatile private var huTimeSyncCount: Int = 0
     @Volatile private var clockLabBannerLogged: Boolean = false
+    private val pxcFrameGate = TftPxcFrameGate()
+    private val socketChannels = Collections.synchronizedMap(WeakHashMap<Socket, TftPxcEvidence.Channel>())
 
     /**
      * Called when the bike selects a PXC channel on a :10922 socket (CAR_CTRL or CAR_DATA).
@@ -41,10 +46,51 @@ class PxcHandshake(
      * the 800NK (sdk 0.9.23.x) tears the whole session down after ~7s of silence on either one.
      */
     @Volatile var onPxcChannelSelected: ((Socket, String) -> Unit)? = null
+    @Volatile var onClientInfoReceived: ((Socket) -> Unit)? = null
+
+    internal fun resetProtocolEvidence() {
+        pxcFrameGate.reset()
+        socketChannels.clear()
+    }
+
+    private fun recordProtocolFrame(frame: PxcFrame, socket: Socket) {
+        if (!BuildConfig.APPLICATION_ID.endsWith(".demo")) return
+        when (frame.cmd) {
+            PxcFrame.CMD_CHANNEL_CAR_CTRL -> socketChannels[socket] = TftPxcEvidence.Channel.CAR_CTRL
+            PxcFrame.CMD_CHANNEL_CAR_DATA -> socketChannels[socket] = TftPxcEvidence.Channel.CAR_DATA
+            PxcFrame.CMD_HEARTBEAT, PxcFrame.CMD_HEARTBEAT_ACK -> return
+        }
+        val channel = socketChannels[socket] ?: TftPxcEvidence.Channel.UNKNOWN
+        val bytes = frame.payload
+        var json: JSONObject? = null
+        val kind = when {
+            bytes.isEmpty() -> TftPxcEvidence.PayloadKind.EMPTY
+            bytes.size > 8192 -> TftPxcEvidence.PayloadKind.TOO_LARGE
+            else -> {
+                val text = String(bytes, Charsets.UTF_8).trimStart()
+                if (!text.startsWith("{")) TftPxcEvidence.PayloadKind.NON_JSON
+                else {
+                    json = runCatching { JSONObject(text) }.getOrNull()
+                    if (json == null) TftPxcEvidence.PayloadKind.INVALID_JSON else TftPxcEvidence.PayloadKind.JSON
+                }
+            }
+        }
+        val keys = json?.keys()?.asSequence()?.toList() ?: emptyList()
+        val port = listOf("port", "ftpPort", "serverPort", "sockPort").firstNotNullOfOrNull { key ->
+            TftPxcEvidence.safePort(json?.opt(key))
+        }
+        val summary = TftPxcEvidence.format(frame.cmd, channel, bytes.size, kind, keys, port)
+        when (pxcFrameGate.accept(frame.cmd, channel, summary)) {
+            TftPxcFrameGate.Decision.SKIP -> return
+            TftPxcFrameGate.Decision.LIMIT -> TftDiagnostics.recordPxcFrame("pxc_frame_limit=64")
+            TftPxcFrameGate.Decision.RECORD -> TftDiagnostics.recordPxcFrame(summary)
+        }
+    }
 
     /** Dispatch one inbound frame on a given socket (ctrl or media). */
     fun handle(tag: String, frame: PxcFrame, socket: Socket) {
         val out = socket.getOutputStream()
+        runCatching { recordProtocolFrame(frame, socket) }
         when (frame.cmd) {
             PxcFrame.CMD_CHANNEL_CAR_CTRL -> {
                 log("[$tag] bike selected CAR_CTRL (0x10000) → ack 0x10001")
@@ -56,9 +102,9 @@ class PxcHandshake(
                 PxcFrame(PxcFrame.CMD_CHANNEL_CAR_DATA + 1, ByteArray(0)).write(out)
                 onPxcChannelSelected?.invoke(socket, "CAR_DATA")
             }
-            PxcFrame.CMD_CLIENT_INFO -> onClientInfo(tag, frame, out)
+            PxcFrame.CMD_CLIENT_INFO -> onClientInfo(tag, frame, out, socket)
             PxcFrame.CMD_QUERY_SPEED -> {
-                log("[$tag] QUERY_SPEED ${frame.payload.asText()} → reply 0x10691")
+                log("[$tag] QUERY_SPEED len=${frame.payload.size} → reply 0x10691")
                 PxcFrame(PxcFrame.CMD_QUERY_SPEED_RLY, ByteArray(0)).write(out)
             }
             PxcFrame.CMD_CHECK_SN -> onCheckSn(tag, frame, out)
@@ -76,7 +122,7 @@ class PxcHandshake(
             else -> {
                 if (!profile.handleUnknownControl(tag, frame, out, log)) {
                     log("[$tag] cmd=0x${frame.cmd.toUInt().toString(16)} (${PxcFrame.nameOf(frame.cmd)}) " +
-                        "len=${frame.payload.size} ${frame.payload.asText()}")
+                        "len=${frame.payload.size} [payload omitted]")
                 }
             }
         }
@@ -142,15 +188,29 @@ class PxcHandshake(
         }
     }
 
-    private fun onClientInfo(tag: String, frame: PxcFrame, out: java.io.OutputStream) {
+    private fun onClientInfo(tag: String, frame: PxcFrame, out: java.io.OutputStream, socket: Socket) {
         val text = frame.payload.asText()
-        log("[$tag] *** CLIENT_INFO from bike *** $text")
+        log("[$tag] CLIENT_INFO from bike len=${frame.payload.size} [payload omitted]")
         val json = try { JSONObject(text) } catch (e: Exception) {
-            log("[$tag] CLIENT_INFO parse failed: $e"); return
+            TftDiagnostics.recordInvalidProjectionClientInfo()
+            log("[$tag] CLIENT_INFO parse failed (${e.javaClass.simpleName})"); return
         }
+        TftDiagnostics.recordProjectionClientInfo { key ->
+            when (val value = json.opt(key)) {
+                is String -> value
+                is Number -> value.toString()
+                is Boolean -> value.toString()
+                else -> null
+            }
+        }
+        TftDiagnostics.recordClientInfoFields(json.keys().asSequence())
         lastClientInfo = json
+        projectionVersions = ConnectionState.ProjectionVersions(
+            client = projectionVersion(json, "version_name"),
+            sdk = projectionVersion(json, "sdkVersion"),
+        )
         carHuid = json.optString("HUID").ifEmpty { json.optString("huid") }.takeIf { it.isNotEmpty() }
-        log("[$tag] carHuid=$carHuid HUName=${json.optString("HUName")} channel=${json.optString("channel")}")
+        log("[$tag] CLIENT_INFO identity_present=${carHuid != null}")
         logClockLabBanner()
 
         profile = BikeProfiles.select(json, log)
@@ -185,13 +245,17 @@ class PxcHandshake(
         log("[$tag] *** BikeProfile selected: ${profile.name} ***")
 
         val reply = profile.buildClientInfoReply(json, carHuid, phoneUuid)
-        log("[$tag] → CLIENT_INFO reply ${reply.toString().take(180)}…")
+        log("[$tag] → CLIENT_INFO reply [payload omitted]")
         PxcFrame(PxcFrame.CMD_CLIENT_INFO_RLY, reply.toString().toByteArray(Charsets.UTF_8)).write(out)
+        runCatching { onClientInfoReceived?.invoke(socket) }
     }
+
+    private fun projectionVersion(info: JSONObject, key: String): String? =
+        (info.opt(key) as? String)?.filterNot(Char::isISOControl)?.trim()?.take(64)?.takeIf(String::isNotEmpty)
 
     private fun onCheckSn(tag: String, frame: PxcFrame, out: java.io.OutputStream) {
         val text = frame.payload.asText()
-        log("[$tag] CHECK_SN from bike: $text")
+        log("[$tag] CHECK_SN from bike len=${frame.payload.size} [payload omitted]")
         val sn = try { JSONObject(text).optString("sn") } catch (e: Exception) { "" }
         // ack the request frame
         PxcFrame(PxcFrame.CMD_CHECK_SN_ACK, ByteArray(0)).write(out)
@@ -203,7 +267,7 @@ class PxcHandshake(
             put("id", sn)
             put("client_set", "easy_conn")
         }
-        log("[$tag] → CHECK_SN_RESULT ${result}")
+        log("[$tag] → CHECK_SN_RESULT [payload omitted]")
         PxcFrame(PxcFrame.CMD_CHECK_SN_RESULT, result.toString().toByteArray(Charsets.UTF_8)).write(out)
     }
 }
