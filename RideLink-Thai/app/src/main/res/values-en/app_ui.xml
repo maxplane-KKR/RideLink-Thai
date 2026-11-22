@@ -90,9 +90,9 @@
     <string name="qr_camera_hint">🔍 Tap to focus or let the camera zoom automatically</string>
     <string name="app_language_title">App language</string>
     <string name="app_language_toggle">TH</string>
-    <string name="gear_title">Recommended gear</string>
-    <string name="gear_button">Shop gear</string>
-    <string name="gear_url">https://ridelink-th.netlify.app/en/#gear</string>
+    <string name="gear_title">Recommended OBD2 adapters</string>
+    <string name="gear_button">Shop OBD2</string>
+    <string name="gear_url">https://ridelink-th.netlify.app/en/#obd2</string>
     <string name="gear_browser_unavailable">No app available to open the website</string>
     <string name="qr_torch_off">Turn off flashlight</string>
     <string name="headunit_dialog_message">In Android Auto, choose ⋮ → Start head unit server, then return to RideLink. The app checks the head unit in standby and shows when it is ready to connect to the bike.</string>
