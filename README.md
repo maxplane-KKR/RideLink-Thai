@@ -29,6 +29,8 @@
 
 ---
 
+<a id="-quick-download"></a>
+
 ## 📥 Quick Download (One-Click)
 
 Download the pre-compiled Android package (`.apk`) directly to your phone:
@@ -50,6 +52,8 @@ Instead of simple screen-casting that mirrors your phone's lockscreen or forces 
 
 ---
 
+<a id="key-features"></a>
+
 ## 🚀 Key Features
 
 * **🏎️ Direct Cluster Projection**: Full Android Auto experience on your dashboard (Google Maps, Waze, Spotify, YouTube Music, Phone calls, Messaging).
@@ -70,6 +74,8 @@ Instead of simple screen-casting that mirrors your phone's lockscreen or forces 
 
 ---
 
+<a id="screenshots"></a>
+
 ## 📱 Screenshots
 
 <p align="center">
@@ -85,6 +91,8 @@ Instead of simple screen-casting that mirrors your phone's lockscreen or forces 
 
 ---
 
+<a id="quick-start-guide"></a>
+
 ## 🛠️ Quick Start Guide
 
 ### Step 1: Enable Headunit Server in Android Auto (One-Time Setup)
@@ -98,6 +106,8 @@ Instead of simple screen-casting that mirrors your phone's lockscreen or forces 
 3. The app establishes the wireless link, captures the bike's gateway, and instantly forwards Android Auto live video to the dashboard.
 
 ---
+
+<a id="supported-motorcycles"></a>
 
 ## 🏍️ รุ่นรถและหน้าจอ
 
