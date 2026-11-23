@@ -298,4 +298,32 @@ class TftDiagnosticLogTest {
         assertTrue(report.contains("startup=first_frame elapsed_ms=2700"))
         assertFalse(report.contains("startup=first_frame elapsed_ms=9999"))
     }
+
+    @Test fun quickReportRetainsLatestConnectionStartupTraceAfterLaterReconnectNoise() {
+        val trace = buildList {
+            add("18:20:24.183  [WiFi] requesting Wi-Fi join: TEST")
+            add("18:20:25.601  [WiFi] Wi-Fi joined: TEST")
+            add("18:20:25.602  [PXC] our IP=192.168.43.2 bike IP=192.168.43.1")
+            add("18:20:25.650  [PXC] [PROBE] *** accepted ***")
+            add("18:20:27.289  [PXC] sent frame #1 (1234b)")
+            add("18:20:27.290  [state] Connected — projecting to dash")
+            repeat(45) { idx ->
+                add("18:26:30.$idx  [WiFi] Wi-Fi join unavailable after 12s — will retry")
+            }
+        }.joinToString("\n")
+        val report = TftDiagnostics.formatQuickReport(
+            diagnosticsText = "",
+            traceText = trace,
+            phoneInfo = "phone",
+            appVersion = "0.2.11",
+            activeProfileName = "Zontes",
+            savedQrModel = "48406",
+            maskedSsid = "••••••••8555",
+            headunitStatus = "CONNECTED",
+            connectionPhase = "IDLE",
+        )
+        assertTrue(report.contains("--- ช่วงเริ่มเชื่อมล่าสุด ---"))
+        assertTrue(report.contains("[WiFi] requesting Wi-Fi join:"))
+        assertTrue(report.contains("[PXC] sent frame #1 (1234b)"))
+    }
 }

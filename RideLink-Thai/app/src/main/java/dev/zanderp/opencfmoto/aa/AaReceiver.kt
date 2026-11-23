@@ -105,17 +105,29 @@ class AaReceiver(
     @Volatile var onHeadunitGuidance: ((Int) -> Unit)? = null
     @Volatile var onHeadunitConnected: (() -> Unit)? = null
 
+    private fun notifyVideoDecoding(fps: Int?, reason: String) {
+        AaVideoBridge.aaDecoding = true
+        if (fps != null) {
+            AaVideoBridge.reportFps(fps)
+        } else {
+            try { AaVideoBridge.fpsListener?.invoke(AaVideoBridge.currentFps) } catch (_: Exception) {}
+        }
+        if (!steadyVideoFired) {
+            steadyVideoFired = true
+            log("[AA] steady video reached ($reason) — signalling ready for bike hand-off")
+            try { AaVideoBridge.onSteadyVideo?.invoke() } catch (_: Exception) {}
+        }
+    }
+
     private val videoDecoder = VideoDecoder().apply {
         fallbackWidth = ServiceDiscoveryResponse.AA_WIDTH
         fallbackHeight = ServiceDiscoveryResponse.AA_HEIGHT
         onFpsChanged = { fps ->
             log("[AA] decode fps=$fps")
-            AaVideoBridge.aaDecoding = true
-            AaVideoBridge.reportFps(fps)
-            if (!steadyVideoFired && fps >= 1) {
-                steadyVideoFired = true
-                log("[AA] steady video reached (fps=$fps) — signalling ready for bike hand-off")
-                try { AaVideoBridge.onSteadyVideo?.invoke() } catch (_: Exception) {}
+            if (fps >= 1) {
+                notifyVideoDecoding(fps, "fps=$fps")
+            } else {
+                AaVideoBridge.reportFps(fps)
             }
         }
     }
@@ -220,6 +232,7 @@ class AaReceiver(
         clearBridgeSession()
         try { activeInput?.shutdown() } catch (_: Exception) {}
         activeInput = null
+        videoDecoder.onFirstFrameListener = null
         try { videoDecoder.stop("AaReceiver.stop") } catch (_: Exception) {}
         unregisterNsd()
         try { serverSocket?.close() } catch (_: Exception) {}
@@ -308,6 +321,7 @@ class AaReceiver(
                 }
                 if (owned) {
                     clearBridgeSession()
+                    videoDecoder.onFirstFrameListener = null
                     activeInput = null
                     // Let the coordinator start fresh: Self-Mode may be re-poked and guidance re-shown.
                     selfModeFallbackTriggered = false
@@ -391,6 +405,11 @@ class AaReceiver(
         AaVideoBridge.aaSessionSeen = true
         nightAutoThread = startNightAutoLoop(t)
         log("[AA] handshake OK — pointing decoder at encoder surface and starting read loop")
+        videoDecoder.onFirstFrameListener = {
+            if (running && transport === t) {
+                notifyVideoDecoding(null, "first frame")
+            }
+        }
         videoDecoder.setSurface(encoderSurface)
         t.startReading()
         if (viaHeadunit) onHeadunitConnected?.invoke()
@@ -404,6 +423,30 @@ class AaReceiver(
 
     private fun sessionBusy(): Boolean = sessionStarting || transport != null
 
+    private val coordinatorWakeLock = java.lang.Object()
+    @Volatile private var coordinatorWakeRequested = false
+    @Volatile private var dialNow = false
+
+    /** ปลุก coordinator ให้ลอง :5277 ทันที (เช่นผู้ใช้กดเริ่มเชื่อมต่อระหว่างรอรอบถัดไป) */
+    fun wakeCoordinator() {
+        synchronized(coordinatorWakeLock) {
+            coordinatorWakeRequested = true
+            dialNow = true
+            coordinatorWakeLock.notifyAll()
+        }
+    }
+
+    private fun waitCoordinator(delayMs: Long) {
+        synchronized(coordinatorWakeLock) {
+            if (coordinatorWakeRequested) {
+                coordinatorWakeRequested = false
+                return
+            }
+            coordinatorWakeLock.wait(delayMs)
+            coordinatorWakeRequested = false
+        }
+    }
+
     /**
      * The single owner of RideLink's :5277 traffic. Every iteration asks
      * [ProjectionHarness.evaluateAaConnectStep] what to do; the loop lives as long as the receiver,
@@ -413,6 +456,7 @@ class AaReceiver(
     private fun ensureCoordinatorLoop() {
         var lastDialAt = -1L
         while (running) {
+            if (dialNow) { dialNow = false; lastDialAt = -1L }
             val now = SystemClock.elapsedRealtime()
             val tdAt = lastTeardownElapsed
             val judgment = ProjectionHarness.evaluateAaConnectStep(
@@ -433,7 +477,7 @@ class AaReceiver(
             when (judgment.action) {
                 AaConnectAction.STOP -> return
                 AaConnectAction.HOLD_SESSION_ACTIVE,
-                AaConnectAction.WAIT_SETTLE_COOLDOWN -> Thread.sleep(judgment.delayMs.coerceIn(50L, 2_000L))
+                AaConnectAction.WAIT_SETTLE_COOLDOWN -> waitCoordinator(judgment.delayMs.coerceIn(50L, 2_000L))
                 AaConnectAction.TRIGGER_SELF_MODE_AND_RETRY_5277 -> {
                     selfModeFallbackTriggered = true
                     log("[AA] ${androidx.core.content.ContextCompat.getContextForLanguage(context).getString(judgment.reasonRes)}")

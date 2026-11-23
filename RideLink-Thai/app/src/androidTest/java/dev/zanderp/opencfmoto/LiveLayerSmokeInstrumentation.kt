@@ -139,6 +139,8 @@ object LiveLayerSmokeMain {
             val nextOutput = checkNotNull(pipeline.encoderInputSurface())
             check(nextOutput !== firstOutput && nextOutput.isValid)
             pipeline.onBikeDataStart()
+            stage = "recreate_bike_encoder_static_keyframe"
+            check(pipeline.pollFrame(600) != null && pipeline.codecConfigBytes()?.isNotEmpty() == true)
             check(awaitEncodedFrame(pipeline, input, Color.GREEN))
             return "pass"
         } catch (error: Throwable) {

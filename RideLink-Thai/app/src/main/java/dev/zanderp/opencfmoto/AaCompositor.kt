@@ -254,9 +254,20 @@ class AaCompositor(private val log: (String) -> Unit) {
                     handler.removeCallbacks(liveTick)
                     liveBitmap = null
                     liveTick.run()
+                } else if (hasContent) {
+                    drawFrame()
                 }
             } catch (e: Exception) {
                 log("[COMPOSITOR] setOutput failed: $e")
+            }
+        }
+    }
+
+    /** ส่งเฟรมล่าสุดเข้า encoder ทันทีเมื่อรถขอเริ่มสตรีม (REQ_RV_DATA_START) เพื่อไม่รอ IDLE_REDRAW_MS */
+    fun requestBikeFrame() {
+        handler.post {
+            if (windowSurface != EGL14.EGL_NO_SURFACE && (hasContent || liveBitmap != null)) {
+                drawFrame()
             }
         }
     }

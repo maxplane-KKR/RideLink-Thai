@@ -582,6 +582,7 @@ class VideoPipeline(
         } catch (e: Exception) {
             log("[VIDEO] requestKeyframe failed: $e")
         }
+        aaCompositor?.requestBikeFrame()
     }
 
     private fun maybeStartDump() {

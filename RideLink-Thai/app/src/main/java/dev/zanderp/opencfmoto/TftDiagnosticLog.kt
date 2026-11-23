@@ -439,11 +439,42 @@ internal object TftDiagnostics {
                 diagLines.takeLast(20).forEach { appendLine(it) }
             }
             if (traceLines.isNotEmpty()) {
+                val startupTrace = latestStartupTraceWindow(traceLines)
+                if (startupTrace.isNotEmpty()) {
+                    appendLine()
+                    appendLine("--- ช่วงเริ่มเชื่อมล่าสุด ---")
+                    startupTrace.forEach { appendLine(it) }
+                }
                 appendLine()
                 appendLine("--- ลำดับเหตุการณ์ Wi-Fi / PXC (${traceLines.size.coerceAtMost(35)} บรรทัดล่าสุด) ---")
                 traceLines.takeLast(35).forEach { appendLine(it) }
             }
         }.trimEnd()
+    }
+
+    private fun latestStartupTraceWindow(traceLines: List<String>): List<String> {
+        val tailStart = (traceLines.size - 35).coerceAtLeast(0)
+        val lastJoinIdx = traceLines.indexOfLast { it.contains("[WiFi] requesting Wi-Fi join:") }
+        val lastIpIdx = traceLines.indexOfLast { it.contains("[PXC] our IP=") }
+        val lastStartIdx = maxOf(lastJoinIdx, lastIpIdx)
+        val firstFrameIdx = traceLines.indexOfLast { it.contains("sent frame #1 ") }
+        val startIdx = if (firstFrameIdx >= 0 && lastStartIdx <= firstFrameIdx) {
+            (0..firstFrameIdx).lastOrNull { traceLines[it].contains("[WiFi] requesting Wi-Fi join:") }
+                ?: lastStartIdx
+        } else if (lastJoinIdx >= 0 && lastIpIdx > lastJoinIdx) {
+            lastJoinIdx
+        } else {
+            lastStartIdx
+        }
+        if (startIdx < 0 || startIdx >= tailStart) return emptyList()
+        val firstFrameAfterStart = (startIdx until traceLines.size)
+            .firstOrNull { traceLines[it].contains("sent frame #1 ") }
+        val endExclusive = if (firstFrameAfterStart != null) {
+            minOf(traceLines.size, firstFrameAfterStart + 2, startIdx + 20)
+        } else {
+            minOf(traceLines.size, startIdx + 20)
+        }
+        return traceLines.subList(startIdx, endExclusive)
     }
 
     suspend fun read(): String = withContext(worker) { store.read() }

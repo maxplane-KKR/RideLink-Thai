@@ -133,7 +133,7 @@
     <string name="unspecified">Not specified</string>
     <string name="hide_details">Hide details</string>
     <string name="no_saved_bike">No bike saved</string>
-    <string name="save_bike_hint">Tap Scan bike QR or Enter Wi-Fi to save your first bike.</string>
+    <string name="save_bike_hint">Tap Scan bike QR to save your first bike.</string>
     <string name="scan_qr">Scan QR</string>
     <string name="headunit_dialog_title">Head unit server (:5277)</string>
     <string name="close">Close</string>

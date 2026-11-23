@@ -114,6 +114,18 @@ class ProjectionHarnessTest {
     }
 
     @Test
+    fun `headunit already live starts PXC immediately at elapsed 0 before first AA frame`() {
+        val immediate = ProjectionHarness.evaluatePxcHandoff(
+            hasBikeNetwork = true,
+            proberActiveOnSameNetwork = false,
+            aaSteadyOrDecoding = false,
+            elapsedSinceSessionStartMs = 0L,
+            headunitSessionLive = true,
+        )
+        assertEquals(ProjectionHarness.HandoffDecision.START_PXC_NOW, immediate)
+    }
+
+    @Test
     fun `recognizes 16-hex Zontes Carbit SSID and masks sensitive details`() {
         val ssid = "A004DC0D30888555"
         assertTrue(ProjectionHarness.isZontesCarbitHexSsid(ssid))

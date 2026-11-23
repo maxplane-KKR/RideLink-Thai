@@ -164,15 +164,6 @@
                                 android:textColor="@color/text_secondary"
                                 android:textSize="11sp" />
                         </LinearLayout>
-
-                        <ImageButton
-                            android:id="@+id/btnQuickStop"
-                            android:layout_width="48dp"
-                            android:layout_height="48dp"
-                            android:background="@drawable/card_inner_glass"
-                            android:src="@drawable/ic_stop_vector"
-                            app:tint="@color/ruby_bright"
-                            android:contentDescription="@string/disconnect" />
                     </LinearLayout>
 
                     <!-- Tap-to-Reveal / Privacy Masked Saved Bike Bar (No Text Overlap, >=52dp Touch Target) -->
@@ -250,7 +241,7 @@
                             android:textStyle="bold" />
                     </LinearLayout>
 
-                    <!-- Button Grid 1: Start (50%) & Stop (50%) -> 48dp Height -->
+                    <!-- Button Grid: Primary Toggle Connect/Stop (50%) & Scan QR (50%) -> 48dp Height -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -279,41 +270,12 @@
                             android:textStyle="bold" />
 
                         <androidx.appcompat.widget.AppCompatButton
-                            android:id="@+id/btnStop"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:minHeight="48dp"
-                            android:layout_weight="1"
-                            android:layout_marginStart="6dp"
-                            android:background="@drawable/btn_liquid_ruby"
-                            android:backgroundTint="@null"
-                            android:stateListAnimator="@null"
-                            android:textAllCaps="false"
-                            android:drawableStart="@drawable/ic_stop_vector"
-                            android:drawablePadding="6dp"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:text="@string/stop"
-                            android:textColor="@color/text_primary"
-                            android:textSize="12sp"
-                            android:textStyle="bold" />
-                    </LinearLayout>
-
-                    <!-- Button Grid 2: Scan QR (50%) & Manual Wi-Fi (50%) -> 48dp Height -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:weightSum="2"
-                        android:layout_marginTop="10dp">
-
-                        <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnScanQr"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:minHeight="48dp"
                             android:layout_weight="1"
-                            android:layout_marginEnd="6dp"
+                            android:layout_marginStart="6dp"
                             android:background="@drawable/btn_liquid_sapphire"
                             android:backgroundTint="@null"
                             android:stateListAnimator="@null"
@@ -324,26 +286,6 @@
                             android:paddingEnd="14dp"
                             android:text="@string/scan_bike_qr"
                             android:textColor="@color/text_primary"
-                            android:textSize="12sp"
-                            android:textStyle="bold" />
-
-                        <androidx.appcompat.widget.AppCompatButton
-                            android:id="@+id/btnManualWifi"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:minHeight="48dp"
-                            android:layout_weight="1"
-                            android:layout_marginStart="6dp"
-                            android:background="@drawable/btn_liquid_pill"
-                            android:backgroundTint="@null"
-                            android:stateListAnimator="@null"
-                            android:textAllCaps="false"
-                            android:drawableStart="@drawable/ic_keyboard_vector"
-                            android:drawablePadding="6dp"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:text="@string/manual_wifi"
-                            android:textColor="@color/cyan_neon"
                             android:textSize="12sp"
                             android:textStyle="bold" />
                     </LinearLayout>

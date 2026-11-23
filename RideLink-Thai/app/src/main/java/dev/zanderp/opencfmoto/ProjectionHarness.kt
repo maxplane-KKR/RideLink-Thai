@@ -145,10 +145,11 @@ object ProjectionHarness {
         proberActiveOnSameNetwork: Boolean,
         aaSteadyOrDecoding: Boolean,
         elapsedSinceSessionStartMs: Long,
+        headunitSessionLive: Boolean = false,
     ): HandoffDecision {
         if (!hasBikeNetwork) return HandoffDecision.WAIT_FOR_WIFI
         if (proberActiveOnSameNetwork) return HandoffDecision.ALREADY_ACTIVE
-        if (aaSteadyOrDecoding || elapsedSinceSessionStartMs >= LOOPBACK_GRACE_MS) {
+        if (headunitSessionLive || aaSteadyOrDecoding || elapsedSinceSessionStartMs >= LOOPBACK_GRACE_MS) {
             return HandoffDecision.START_PXC_NOW
         }
         return HandoffDecision.DEFER_FOR_AA_LOOPBACK
@@ -250,7 +251,7 @@ object ProjectionHarness {
     // So: one socket at a time, a settle window after every teardown, and no throwaway probes.
 
     /** Settle window after we closed the previous session WITH an AAP ByeByeRequest. */
-    const val SETTLE_AFTER_BYEBYE_MS = 300L
+    const val SETTLE_AFTER_BYEBYE_MS = 650L
     /** Settle window after an ungraceful drop (EOF / failed handshake) — Gearhead lingers longer. */
     const val SETTLE_AFTER_UNGRACEFUL_MS = 1_500L
     /** Poll interval while a session is handshaking/live. */

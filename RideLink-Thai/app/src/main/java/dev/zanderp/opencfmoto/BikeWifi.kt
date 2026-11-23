@@ -9,13 +9,14 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
-import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import androidx.annotation.RequiresApi
 
 /**
  * Joins the bike's hotspot using WifiNetworkSpecifier (no system Wi-Fi config required).
@@ -46,6 +47,7 @@ object BikeWifi {
     val currentNetwork: Network? get() = networkState.current
 
     @Volatile private var active = false
+    @Volatile private var suggestionsCleared = false
     private val firstDelivered: Boolean get() = networkState.everDelivered
     private var rejoinAttempts = 0
     private var ssid: String = ""
@@ -120,38 +122,35 @@ object BikeWifi {
         this.active = true
         this.rejoinAttempts = 0
 
-        // 1. Suggest network credentials on Android 10+ so OS can auto-join silently
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // 1. Ensure no stale WifiNetworkSuggestion entries fight our WifiNetworkSpecifier SoftAP request
+        if (!suggestionsCleared && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            suggestionsCleared = true
             try {
-                val suggestion = WifiNetworkSuggestion.Builder()
-                    .setSsid(ssid)
-                    .setWpa2Passphrase(psk)
-                    .setIsAppInteractionRequired(false)
-                    .build()
                 val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-                val status = wm?.addNetworkSuggestions(listOf(suggestion))
-                log("WifiNetworkSuggestion registered for $ssid (status=$status)")
+                val status = wm?.removeNetworkSuggestions(emptyList())
+                log("WifiNetworkSuggestion cleared for silent SoftAP join (status=$status)")
             } catch (e: Exception) {
-                log("WifiNetworkSuggestion note: $e")
+                log("WifiNetworkSuggestion cleanup note: $e")
             }
         }
 
         // 2. Register general Wi-Fi callback to capture background system connection immediately
-        val genCb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(net: Network) {
-                if (generalCallback === this) checkAndDeliverBikeNet(net)
-            }
-            override fun onCapabilitiesChanged(net: Network, caps: NetworkCapabilities) {
-                if (generalCallback === this) checkAndDeliverBikeNet(net)
-            }
-            override fun onLost(net: Network) {
-                if (generalCallback === this) handleNetworkLost(net)
-            }
-        }
+        val genCb = createNetworkCallback(
+            onAvailable = { self, net ->
+                if (generalCallback === self) checkAndDeliverBikeNet(net)
+            },
+            onCapabilitiesChanged = { self, net, caps ->
+                if (generalCallback === self) checkAndDeliverBikeNet(net, caps)
+            },
+            onLost = { self, net ->
+                if (generalCallback === self) handleNetworkLost(net)
+            },
+        )
         generalCallback = genCb
         try {
             val genReq = NetworkRequest.Builder()
                 .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 .build()
             cm.registerNetworkCallback(genReq, genCb)
         } catch (e: Exception) {
@@ -172,41 +171,61 @@ object BikeWifi {
         registerCallback()
     }
 
-    private fun checkAndDeliverBikeNet(net: Network) {
+    private fun checkAndDeliverBikeNet(net: Network, deliveredCaps: NetworkCapabilities? = null) {
         if (!active) return
         val context = appContext ?: return
         val cm = this.cm ?: return
-        val caps = cm.getNetworkCapabilities(net) ?: return
+        val caps = deliveredCaps ?: cm.getNetworkCapabilities(net) ?: return
         if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return
 
-        var matches = false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val wifiInfo = caps.transportInfo as? android.net.wifi.WifiInfo
-            val s = wifiInfo?.ssid?.trim('"', ' ')
-            if (s != null && s.equals(ssid.trim('"', ' '), ignoreCase = true)) {
-                matches = true
+        val targetSsid = ssid.trim('"', ' ')
+        val transportSsid = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val wifiInfo = caps.transportInfo as? WifiInfo
+            wifiInfo?.ssid?.trim('"', ' ')?.takeIf {
+                it.isNotBlank() && !it.contains("unknown", ignoreCase = true)
             }
-        }
-        if (!matches) {
+        } else null
+
+        val matches = if (transportSsid != null) {
+            transportSsid.equals(targetSsid, ignoreCase = true)
+        } else {
             val wm = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-            val curr = wm?.connectionInfo?.ssid?.trim('"', ' ')
-            if (curr != null && curr.equals(ssid.trim('"', ' '), ignoreCase = true)) {
-                matches = true
+            @Suppress("DEPRECATION")
+            val curr = wm?.connectionInfo?.ssid?.trim('"', ' ')?.takeIf {
+                it.isNotBlank() && !it.contains("unknown", ignoreCase = true)
             }
+            val ssidMatches = curr != null && curr.equals(targetSsid, ignoreCase = true)
+            val gatewayMatches = !ssidMatches && currentNetwork == null &&
+                cm.getLinkProperties(net)?.routes?.any { r ->
+                    val g = r.gateway
+                    g is java.net.Inet4Address && (g.hostAddress ?: "").let {
+                        it.startsWith("192.168.3.") ||
+                            it.startsWith("192.168.43.") ||
+                            it.startsWith("192.168.50.") ||
+                            it.startsWith("192.168.18.") ||
+                            it.startsWith("192.168.123.") ||
+                            it.startsWith("192.168.49.")
+                    }
+                } == true
+            ssidMatches || gatewayMatches
         }
 
         if (matches) {
-            deliverNetwork(net, viaSystem = true)
+            deliverNetwork(net, viaSystem = true, deliveredCaps = caps)
         }
     }
 
-    private fun deliverNetwork(network: Network, viaSystem: Boolean) {
+    private fun deliverNetwork(
+        network: Network,
+        viaSystem: Boolean,
+        deliveredCaps: NetworkCapabilities? = null,
+    ) {
         if (!active) return
         val change = networkState.available(network)
         if (change == BikeWifiNetworkState.Available.UNCHANGED) return
         retryScheduler.cancel()
         rejoinAttempts = 0
-        logLinkOnce(network)
+        logLinkOnce(network, deliveredCaps)
         when {
             change == BikeWifiNetworkState.Available.REACQUIRED ->
                 logCb?.invoke("Wi-Fi re-acquired: $ssid — restarting bike link on fresh network")
@@ -261,27 +280,24 @@ object BikeWifi {
         previous?.let { try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {} }
         val publish = publishProjectionState
 
-        val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                if (callback !== this) return
+        val cb = createNetworkCallback(
+            onAvailable = { self, network ->
+                if (callback !== self) return@createNetworkCallback
                 // Do not bindProcessToNetwork here. Binding the process to the bike AP removes
                 // the 127.0.0.1 route (AaReceiver.connectLoopback). That dropped AA ~500ms after
                 // a successful handshake on DIRECT-go-CFMOTO / 800NK before video went steady.
                 // [BikeLink] / [EasyConnProber] call [rebindProcessToBike] when PXC actually starts.
                 // AppHttp.ensureCellularUplink()
                 deliverNetwork(network, viaSystem = false)
-            }
-
-            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                // Band/RSSI logged once per join from onAvailable path via logLinkOnce.
-            }
-
-            override fun onLost(network: Network) {
-                if (callback === this) handleNetworkLost(network)
-            }
-
-            override fun onUnavailable() {
-                if (callback !== this || !active || currentNetwork != null) return
+            },
+            onCapabilitiesChanged = { self, network, caps ->
+                if (callback === self) logLinkOnce(network, caps)
+            },
+            onLost = { self, network ->
+                if (callback === self) handleNetworkLost(network)
+            },
+            onUnavailable = { self ->
+                if (callback !== self || !active || currentNetwork != null) return@createNetworkCallback
                 val timeoutSec = (if (firstDelivered) REJOIN_TIMEOUT_MS else FIRST_JOIN_TIMEOUT_MS) / 1000
                 logCb?.invoke(
                     "Wi-Fi join unavailable after ${timeoutSec}s " +
@@ -304,8 +320,8 @@ object BikeWifi {
                 // previous dead bike AP (resume / auto-connect path).
                 if (currentNetwork == null) unbindProcess()
                 if (active) scheduleRejoin()
-            }
-        }
+            },
+        )
         callback = cb
         // Timeout is mandatory — see FIRST_JOIN_TIMEOUT_MS / REJOIN_TIMEOUT_MS.
         val timeoutMs = if (firstDelivered) REJOIN_TIMEOUT_MS else FIRST_JOIN_TIMEOUT_MS
@@ -318,14 +334,47 @@ object BikeWifi {
         cm.requestNetwork(req, cb, timeoutMs)
     }
 
+    private fun createNetworkCallback(
+        onAvailable: (ConnectivityManager.NetworkCallback, Network) -> Unit,
+        onCapabilitiesChanged: (ConnectivityManager.NetworkCallback, Network, NetworkCapabilities) -> Unit = { _, _, _ -> },
+        onLost: (ConnectivityManager.NetworkCallback, Network) -> Unit,
+        onUnavailable: (ConnectivityManager.NetworkCallback) -> Unit = {},
+    ): ConnectivityManager.NetworkCallback =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            createLocationAwareNetworkCallback(onAvailable, onCapabilitiesChanged, onLost, onUnavailable)
+        } else {
+            object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) = onAvailable(this, network)
+                override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) =
+                    onCapabilitiesChanged(this, network, networkCapabilities)
+                override fun onLost(network: Network) = onLost(this, network)
+                override fun onUnavailable() = onUnavailable(this)
+            }
+        }
+
+    @RequiresApi(Build.VERSION_CODES.S)
+    private fun createLocationAwareNetworkCallback(
+        onAvailable: (ConnectivityManager.NetworkCallback, Network) -> Unit,
+        onCapabilitiesChanged: (ConnectivityManager.NetworkCallback, Network, NetworkCapabilities) -> Unit,
+        onLost: (ConnectivityManager.NetworkCallback, Network) -> Unit,
+        onUnavailable: (ConnectivityManager.NetworkCallback) -> Unit,
+    ): ConnectivityManager.NetworkCallback =
+        object : ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {
+            override fun onAvailable(network: Network) = onAvailable(this, network)
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) =
+                onCapabilitiesChanged(this, network, networkCapabilities)
+            override fun onLost(network: Network) = onLost(this, network)
+            override fun onUnavailable() = onUnavailable(this)
+        }
+
     @Volatile private var linkLogged = false
 
-    private fun logLinkOnce(network: Network) {
+    private fun logLinkOnce(network: Network, deliveredCaps: NetworkCapabilities? = null) {
         if (linkLogged) return
         val cm = this.cm ?: return
         try {
-            val caps = cm.getNetworkCapabilities(network) ?: return
-            val info = caps.transportInfo as? android.net.wifi.WifiInfo ?: return
+            val caps = deliveredCaps ?: cm.getNetworkCapabilities(network) ?: return
+            val info = caps.transportInfo as? WifiInfo ?: return
             linkLogged = true
             val mhz = info.frequency
             val band = if (mhz in 2400..2500) "2.4GHz — SHARED WITH BLUETOOTH" else "${mhz / 1000}GHz"

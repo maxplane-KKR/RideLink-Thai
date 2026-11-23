@@ -23,9 +23,7 @@ import android.view.Surface
 import android.view.TextureView
 import android.view.View
 import android.widget.Button
-import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.RadioButton
@@ -61,13 +59,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvOnlineBadge: TextView
     private lateinit var tvHeadunitHeaderStatus: TextView
     private lateinit var statusDot: View
-    private lateinit var btnQuickStop: ImageButton
 
     // Dashboard Action Buttons
     private lateinit var btnStart: Button
-    private lateinit var btnStop: Button
     private lateinit var btnScanQr: Button
-    private lateinit var btnManualWifi: Button
 
     // Dashboard Live Viewport
     private lateinit var mainScrollView: FastScrollView
@@ -369,6 +364,7 @@ class MainActivity : AppCompatActivity() {
         if (headunitSetupComplete) activateProjectionControls()
         checkServerPort()
         syncVisiblePreviewSurface()
+        updatePrimaryToggleUi(ConnectionState.phase)
         updateFpsAndPlaceholderUi(AaVideoBridge.currentFps)
     }
 
@@ -493,12 +489,9 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { checkServerPort(fromUserClick = true) }
         }
         statusDot = findViewById(R.id.statusDot)
-        btnQuickStop = findViewById(R.id.btnQuickStop)
 
         btnStart = findViewById(R.id.btnStart)
-        btnStop = findViewById(R.id.btnStop)
         btnScanQr = findViewById(R.id.btnScanQr)
-        btnManualWifi = findViewById(R.id.btnManualWifi)
 
         mainScrollView = findViewById(R.id.mainScrollView)
         layoutAaViewportContainer = findViewById(R.id.layoutAaViewportContainer)
@@ -616,10 +609,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
-        btnStart.setOnClickListener(::startProjection)
-        btnFullAaStart?.setOnClickListener(::startProjection)
-        btnStop.setOnClickListener(::stopProjection)
-        btnQuickStop.setOnClickListener(::stopProjection)
+        btnStart.setOnClickListener(::onPrimaryConnectionToggle)
+        btnFullAaStart?.setOnClickListener(::onPrimaryConnectionToggle)
         btnTftSyncStop.setOnClickListener { button ->
             button.isEnabled = false
             stopProjection(button)
@@ -669,10 +660,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnScanQr.setOnClickListener { launchBikeScanner() }
-
-        btnManualWifi.setOnClickListener {
-            showManualWifiDialog()
-        }
 
         btnCheckServer.setOnClickListener {
             it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -725,6 +712,18 @@ class MainActivity : AppCompatActivity() {
         setupSettingsListeners()
     }
 
+    private fun onPrimaryConnectionToggle(view: View) {
+        val toggle = SessionStartPolicy.evaluateToggleControl(
+            running = SessionService.isRunning,
+            projecting = SessionService.isProjectionRequested,
+            phase = ConnectionState.phase,
+        )
+        when (toggle.command) {
+            SessionStartPolicy.ToggleCommand.STOP_SESSION -> stopProjection(view)
+            SessionStartPolicy.ToggleCommand.START_CONNECT -> startProjection(view)
+        }
+    }
+
     private fun startProjection(view: View) {
         view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         startAutoProjection(getString(R.string.conn_starting_aa))
@@ -738,7 +737,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestProjectionStop() {
         val intent = Intent(this, SessionService::class.java).apply {
-            action = SessionService.ACTION_STOP_PROJECTION
+            action = SessionService.ACTION_STOP
         }
         startService(intent)
         updateFpsAndPlaceholderUi(0)
@@ -1417,8 +1416,25 @@ class MainActivity : AppCompatActivity() {
             tvOnlineBadge.text = getString(R.string.badge_standby)
             tvOnlineBadge.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
         }
+        updatePrimaryToggleUi(phase)
         updateTftSyncUi(phase, hasSavedBikeWifi = !savedSsid.isNullOrBlank(), detail = cleanDetail)
         if (tftDetailsContainer.visibility == View.VISIBLE) updateTftStatusText()
+    }
+
+    private fun updatePrimaryToggleUi(phase: Phase) {
+        val toggle = SessionStartPolicy.evaluateToggleControl(
+            running = SessionService.isRunning,
+            projecting = SessionService.isProjectionRequested,
+            phase = phase,
+        )
+        btnStart.setText(toggle.textRes)
+        btnStart.setBackgroundResource(toggle.backgroundRes)
+        btnStart.setCompoundDrawablesRelativeWithIntrinsicBounds(toggle.iconRes, 0, 0, 0)
+        btnFullAaStart?.let { btn ->
+            val stopMode = toggle.command == SessionStartPolicy.ToggleCommand.STOP_SESSION
+            btn.setText(if (stopMode) R.string.disconnect else R.string.full_live_start)
+            btn.setBackgroundResource(if (stopMode) R.drawable.btn_liquid_ruby else R.drawable.btn_liquid_emerald)
+        }
     }
 
     private fun updateTftSyncUi(phase: Phase, hasSavedBikeWifi: Boolean, detail: String) {
@@ -1549,48 +1565,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
         return false
-    }
-
-    private fun showManualWifiDialog() {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            val pad = (18 * resources.displayMetrics.density).toInt()
-            setPadding(pad, pad / 2, pad, 0)
-        }
-        val currentQr = BikeMemory.selected(this)?.qr
-        val ssidInput = EditText(this).apply {
-            hint = getString(R.string.wifi_ssid_hint)
-            setText(currentQr?.ssid ?: "")
-            setSingleLine()
-        }
-        val pwdInput = EditText(this).apply {
-            hint = getString(R.string.wifi_password_hint)
-            setText(currentQr?.pwd ?: "12345678")
-            setSingleLine()
-        }
-        container.addView(ssidInput)
-        container.addView(pwdInput)
-
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.wifi_dialog_title))
-            .setMessage(getString(R.string.wifi_dialog_message))
-            .setView(container)
-            .setPositiveButton(getString(R.string.save_connect)) { _, _ ->
-                val ssid = ssidInput.text.toString().trim()
-                val pwd = pwdInput.text.toString().trim().ifBlank { "12345678" }
-                if (ssid.isNotBlank()) {
-                    val raw = "WIFI:S:$ssid;T:WPA;P:$pwd;;"
-                    val qr = QrData.parse(raw)
-                    if (qr != null) {
-                        BikeMemory.save(this, raw, qr)
-                        refreshSavedBikeInfo()
-                        initSettingsState()
-                        startAutoProjection(getString(R.string.bike_saved_start))
-                    }
-                }
-            }
-            .setNegativeButton(getString(R.string.tft_cancel), null)
-            .show()
     }
 
     private fun initSettingsState() {

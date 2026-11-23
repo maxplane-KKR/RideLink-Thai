@@ -111,6 +111,13 @@ class SessionService : Service() {
         val targetClean = targetSsid?.trim('"', ' ')
         val allNets = cm.allNetworks
 
+        // 0. Network ที่ BikeWifi ถืออยู่แล้วและยังเป็น Wi-Fi ให้ใช้ต่อทันที
+        BikeWifi.currentNetwork?.let { held ->
+            if (cm.getNetworkCapabilities(held)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
+                return held
+            }
+        }
+
         // 1. Direct SSID match via NetworkCapabilities (Android 10+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !targetClean.isNullOrBlank()) {
             for (net in allNets) {
@@ -145,7 +152,7 @@ class SessionService : Service() {
                 val gw = r.gateway
                 if (gw is Inet4Address && !gw.isAnyLocalAddress && !gw.isLoopbackAddress) {
                     val host = gw.hostAddress ?: ""
-                    if (host.startsWith("192.168.43.") || host.startsWith("192.168.50.") ||
+                    if (host.startsWith("192.168.3.") || host.startsWith("192.168.43.") || host.startsWith("192.168.50.") ||
                         host.startsWith("192.168.18.") || host.startsWith("192.168.123.") ||
                         host.startsWith("192.168.49.")
                     ) {
@@ -174,8 +181,9 @@ class SessionService : Service() {
             return START_NOT_STICKY
         }
         if (action == ACTION_STOP_PROJECTION) {
-            stopProjectionSync()
-            updateStandbyTimeout()
+            // กดหยุดครั้งเดียวหยุดทั้งเซสชัน (ไม่ค้างสแตนด์บาย)
+            standbyStoppedInBackground = false
+            stopSession()
             return START_NOT_STICKY
         }
 
@@ -278,6 +286,7 @@ class SessionService : Service() {
                 sameConfiguration = currentConfiguration == config,
                 error = ConnectionState.phase == Phase.ERROR,
                 wifiPickerError = ConnectionState.detail.isResource(R.string.conn_detail_wifi_picker),
+                headunitLive = AaVideoBridge.headunitSessionLive,
             )
             if (decision == SessionStartPolicy.Action.REUSE_PROJECTION) {
                 TftDiagnostics.markConnectionStartup(ConnectionStartupStage.REPEAT_REQUEST, requestedAtMs)
@@ -289,10 +298,24 @@ class SessionService : Service() {
                 return
             }
             if (isRunning) ensureForeground(projectionRequested)
+            if (decision == SessionStartPolicy.Action.RESTART_BIKE_LINK) {
+                // Head Unit :5277 ยังดีอยู่ — เริ่มใหม่เฉพาะลิงก์รถ (Wi-Fi + PXC) ไม่ทำลาย Android Auto
+                LogBus.log("[Session] เริ่มลิงก์รถใหม่เฉพาะ Wi-Fi/PXC — คง Head Unit :5277 ไว้")
+                resetBikeLinkOnly()
+                TftDiagnostics.beginConnectionStartup(requestedAtMs)
+                isProjectionRequested = true
+                checkNotNull(standbyReceiver).allowSelfModeRecovery = true
+                acquireLocks()
+                publishProjectionStarting(bikeName, config.profile.panelSize ?: (config.video.width to config.video.height))
+                TftDiagnostics.markConnectionStartup(ConnectionStartupStage.HEADUNIT_READY)
+                startBikeConnection(sessionGeneration, qr)
+                return
+            }
             if (decision == SessionStartPolicy.Action.PROMOTE_STANDBY) {
                 TftDiagnostics.beginConnectionStartup(requestedAtMs)
                 isProjectionRequested = true
                 checkNotNull(standbyReceiver).allowSelfModeRecovery = true
+                if (!AaVideoBridge.headunitSessionLive) standbyReceiver.wakeCoordinator()
                 acquireLocks()
                 publishProjectionStarting(bikeName, config.profile.panelSize ?: (config.video.width to config.video.height))
                 if (AaVideoBridge.headunitSessionLive) {
@@ -395,6 +418,7 @@ class SessionService : Service() {
                             if (isProjectionRequested) {
                                 TftDiagnostics.markConnectionStartup(ConnectionStartupStage.HEADUNIT_READY)
                                 startBikeConnection(gen, qr)
+                                bikeCallbacks.current?.let(::maybeHandoffToPxc)
                             } else {
                                 ConnectionState.set(Phase.IDLE, R.string.headunit_header_standby)
                                 updateNotification(localizedString(R.string.headunit_header_standby))
@@ -415,11 +439,12 @@ class SessionService : Service() {
                 error("Android Auto decoder surface is unavailable")
             }
 
-            // A successful :5277 handshake starts the bike Wi-Fi step.
+            // Head Unit :5277 และ Wi-Fi รถเริ่มขนานกัน; PXC จะเริ่มเมื่อทั้งสองฝั่งพร้อม
             if (!projectionRequested) {
                 ConnectionState.set(Phase.IDLE, R.string.headunit_header_checking)
             } else {
                 publishProjectionStarting(bikeName, panel)
+                startBikeConnection(gen, qr)
             }
         } catch (e: Exception) {
             LogBus.log("[Session] startSession error: $e")
@@ -441,8 +466,10 @@ class SessionService : Service() {
     }
 
     private fun startBikeConnection(gen: Int, qr: QrData?) {
+        // มี QR แล้วให้เข้า Wi-Fi รถขนานไปกับการต่อ :5277 ได้เลย (BikeWifi ไม่ bind โปรเซส) ส่วน PXC
+        // ยังรอ Head Unit/AA พร้อมใน maybeHandoffToPxc
         if (gen != sessionGeneration || !isRunning || !isProjectionRequested ||
-            bikeConnectionStartedAtElapsed != null || !AaVideoBridge.headunitSessionLive
+            bikeConnectionStartedAtElapsed != null || (qr == null && !AaVideoBridge.headunitSessionLive)
         ) return
         val attempt = bikeCallbacks.begin()
         bikeConnectionStartedAtElapsed = SystemClock.elapsedRealtime()
@@ -456,7 +483,7 @@ class SessionService : Service() {
 
             if (qr != null) {
                 TftDiagnostics.markConnectionStartup(ConnectionStartupStage.WIFI_REQUESTED)
-                BikeWifi.join(
+                BikeWifi.reuseOrJoin(
                     context = this,
                     ssid = qr.ssid,
                     psk = qr.pwd,
@@ -476,6 +503,8 @@ class SessionService : Service() {
                         bikeCallbacks.dispatch(attempt) {
                             bikeNetwork = null
                             proberActiveNetwork = null
+                            try { prober?.stop() } catch (_: Exception) {}
+                            prober = null
                             ConnectionState.set(Phase.RECONNECTING, R.string.wifi_auto_retry)
                         }
                     },
@@ -512,12 +541,18 @@ class SessionService : Service() {
         }
 
         val net = bikeNetwork
+        // PXC ต้องรอ Head Unit/AA พร้อมก่อน (Wi-Fi อาจมาก่อนได้)
+        if (net != null && !AaVideoBridge.headunitSessionLive && !AaVideoBridge.aaSessionLive) {
+            bikeCallbacks.scheduleRetry(attempt, 500L) { maybeHandoffToPxc(attempt) }
+            return
+        }
         val elapsed = SystemClock.elapsedRealtime() - bikeStartedAt
         val decision = ProjectionHarness.evaluatePxcHandoff(
             hasBikeNetwork = net != null,
             proberActiveOnSameNetwork = net != null && net == proberActiveNetwork && prober != null,
             aaSteadyOrDecoding = AaVideoBridge.aaDecoding || AaVideoBridge.currentFps > 0,
             elapsedSinceSessionStartMs = elapsed,
+            headunitSessionLive = AaVideoBridge.headunitSessionLive,
         )
 
         when (decision) {
@@ -562,6 +597,18 @@ class SessionService : Service() {
         }
     }
 
+    /** รีเซ็ตเฉพาะลิงก์รถ (Wi-Fi/PXC) โดยไม่แตะ AaReceiver หรือ VideoPipeline */
+    private fun resetBikeLinkOnly() {
+        encoderCleanupGeneration++
+        bikeCallbacks.end()
+        TftDiagnostics.stopConnectionStartup()
+        proberActiveNetwork = null
+        bikeConnectionStartedAtElapsed = null
+        try { prober?.stop() } catch (_: Exception) {}
+        prober = null
+        bikeNetwork = null
+    }
+
     private fun stopBikeProjection(): EasyConnProber? {
         encoderCleanupGeneration++
         bikeCallbacks.end()
@@ -601,46 +648,6 @@ class SessionService : Service() {
         } catch (_: Exception) {}
 
         AaVideoBridge.resetSessionState()
-    }
-
-    private fun stopProjectionSync() {
-        val reusableHeadunit = isRunning && receiver != null && pipeline != null &&
-            currentConfiguration != null && AaVideoBridge.headunitSessionLive
-        if (!SessionStartPolicy.keepHeadunitAfterSyncStop(isProjectionRequested, reusableHeadunit)) {
-            stopSession()
-            return
-        }
-        isProjectionRequested = false
-        receiver?.allowSelfModeRecovery = false
-        AaSelfMode.cancel()
-        RideScreenLiveDashboard.stop(this)
-        val stoppedProber = stopBikeProjection()
-        ConnectionState.set(Phase.IDLE, R.string.headunit_header_standby)
-        updateNotification(localizedString(R.string.headunit_header_standby))
-        LogBus.log("[Session] หยุดซิงค์จอรถ · Head Unit ยังสแตนด์บาย")
-        pipeline?.let { releaseStoppedBikeEncoder(stoppedProber, it, sessionGeneration, encoderCleanupGeneration, 12) }
-    }
-
-    private fun releaseStoppedBikeEncoder(
-        stoppedProber: EasyConnProber?, target: VideoPipeline, generation: Int, cleanupGeneration: Int, retries: Int,
-    ) {
-        if (!isRunning || isProjectionRequested || generation != sessionGeneration ||
-            cleanupGeneration != encoderCleanupGeneration || pipeline !== target) return
-        if (stoppedProber?.isVideoConfigIdle() != false) {
-            if (!target.releaseBikeEncoder()) {
-                LogBus.log("[Session] ปล่อย encoder ไม่สำเร็จ — หยุดเซสชันทั้งหมด")
-                stopSession()
-            }
-            return
-        }
-        if (retries <= 0) {
-            LogBus.log("[Session] ปล่อย encoder ไม่สำเร็จ — หยุดเซสชันทั้งหมด")
-            stopSession()
-            return
-        }
-        mainHandler.postDelayed({
-            releaseStoppedBikeEncoder(stoppedProber, target, generation, cleanupGeneration, retries - 1)
-        }, 250L)
     }
 
     private fun stopSession() {

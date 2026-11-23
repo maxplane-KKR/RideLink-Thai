@@ -8,10 +8,12 @@ import android.net.Network
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
+import androidx.annotation.RequiresApi
 import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
@@ -28,7 +30,7 @@ import java.util.concurrent.atomic.AtomicReference
 object EasyConnDiscovery {
 
     const val SERVICE_TYPE = "_EasyConn._tcp."
-    private const val NSD_TIMEOUT_MS = 12_000L
+    private const val NSD_TIMEOUT_MS = 6_000L
     private const val SCAN_CONNECT_MS = 350
     private const val WIDE_SCAN_CONNECT_MS = 250
     private val SCAN_PORTS = (10915..10935).toList()
@@ -52,7 +54,14 @@ object EasyConnDiscovery {
         val source: String,
     )
 
-    fun discoverNsd(context: Context, log: (String) -> Unit): Endpoint? {
+    fun discoverNsd(
+        context: Context,
+        log: (String) -> Unit,
+        network: Network? = null,
+        timeoutMs: Long = NSD_TIMEOUT_MS,
+        isCancelled: () -> Boolean = { false },
+    ): Endpoint? {
+        if (isCancelled()) return null
         val nsd = context.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: run {
             log("[DISC] NsdManager unavailable")
             return null
@@ -71,7 +80,7 @@ object EasyConnDiscovery {
             }
             override fun onDiscoveryStopped(serviceType: String?) {}
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                if (found.get() != null) return
+                if (found.get() != null || isCancelled()) return
                 val name = serviceInfo.serviceName ?: "?"
                 log("[DISC] found service name=$name — resolving")
                 try {
@@ -98,19 +107,43 @@ object EasyConnDiscovery {
         }
 
         try {
-            nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discovery)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && network != null) {
+                discoverServicesOnNetwork(nsd, network, Executor { it.run() }, discovery)
+            } else {
+                @Suppress("DEPRECATION")
+                nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discovery)
+            }
         } catch (e: Exception) {
             log("[DISC] discoverServices failed: $e")
             return null
         }
+        var interrupted = false
         try {
-            done.await(NSD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            done.await(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
+            interrupted = true
             Thread.currentThread().interrupt()
+        } finally {
+            try { nsd.stopServiceDiscovery(discovery) } catch (_: Exception) {}
         }
-        try { nsd.stopServiceDiscovery(discovery) } catch (_: Exception) {}
-        if (found.get() == null) log("[DISC] NSD timed out / no usable EasyConn advertisement")
+        if (found.get() == null) {
+            if (interrupted || isCancelled()) {
+                log("[DISC] NSD cancelled")
+            } else {
+                log("[DISC] NSD timed out / no usable EasyConn advertisement")
+            }
+        }
         return found.get()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun discoverServicesOnNetwork(
+        nsd: NsdManager,
+        network: Network,
+        executor: Executor,
+        listener: NsdManager.DiscoveryListener,
+    ) {
+        nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, network, executor, listener)
     }
 
     private fun endpointFrom(info: NsdServiceInfo): Endpoint? {
@@ -163,9 +196,10 @@ object EasyConnDiscovery {
         myIp: Inet4Address,
         openSocket: (Network?, Inet4Address) -> Socket,
         log: (String) -> Unit,
+        isRunning: () -> Boolean = { true },
     ): List<Int> {
         log("[DISC] port-scanning ${bikeIp.hostAddress} ${SCAN_PORTS.first()}–${SCAN_PORTS.last()}…")
-        val open = scanPorts(bikeIp, network, myIp, openSocket, SCAN_PORTS, SCAN_CONNECT_MS)
+        val open = scanPorts(bikeIp, network, myIp, openSocket, SCAN_PORTS, SCAN_CONNECT_MS, isRunning)
         log(
             if (open.isEmpty()) "[DISC] port-scan: none open"
             else "[DISC] port-scan open: $open",
@@ -183,12 +217,13 @@ object EasyConnDiscovery {
         myIp: Inet4Address,
         openSocket: (Network?, Inet4Address) -> Socket,
         log: (String) -> Unit,
+        isRunning: () -> Boolean = { true },
     ): List<Int> {
         log(
             "[DISC] thinkerride-scan ${bikeIp.hostAddress} " +
                 "(${THINKER_SCAN_PORTS.size} ports, log-only)…",
         )
-        val open = scanPorts(bikeIp, network, myIp, openSocket, THINKER_SCAN_PORTS, WIDE_SCAN_CONNECT_MS)
+        val open = scanPorts(bikeIp, network, myIp, openSocket, THINKER_SCAN_PORTS, WIDE_SCAN_CONNECT_MS, isRunning)
         log(
             if (open.isEmpty()) "[DISC] thinkerride-scan: none open"
             else "[DISC] thinkerride-scan open: $open",
@@ -203,9 +238,11 @@ object EasyConnDiscovery {
         openSocket: (Network?, Inet4Address) -> Socket,
         ports: List<Int>,
         connectMs: Int,
+        isRunning: () -> Boolean = { true },
     ): List<Int> {
         val open = ArrayList<Int>()
         for (port in ports) {
+            if (!isRunning()) break
             try {
                 val s = openSocket(network, myIp)
                 try {

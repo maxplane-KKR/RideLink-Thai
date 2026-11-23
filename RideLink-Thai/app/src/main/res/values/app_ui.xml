@@ -133,7 +133,7 @@
     <string name="unspecified">ไม่ระบุ</string>
     <string name="hide_details">ซ่อนข้อมูล</string>
     <string name="no_saved_bike">ยังไม่มีรถที่จำไว้</string>
-    <string name="save_bike_hint">กดปุ่ม \'สแกน QR รถ\' หรือ \'ใส่ Wi-Fi เอง\' เพื่อบันทึกครั้งแรก</string>
+    <string name="save_bike_hint">กดปุ่ม \'สแกน QR รถ\' เพื่อบันทึกครั้งแรก</string>
     <string name="scan_qr">สแกน QR</string>
     <string name="headunit_dialog_title">เซิร์ฟเวอร์เฮดยูนิต (:5277)</string>
     <string name="close">ปิด</string>
