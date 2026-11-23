@@ -14,7 +14,7 @@
     <img src="https://img.shields.io/badge/Latest%20Release-v0.2.12-00C853?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" />
   </a>
   <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.12/RideLink-Thai-v0.2.12.apk">
-    <img src="https://img.shields.io/badge/Download-APK%20(Direct)-2962FF?style=for-the-badge&logo=android&logoColor=white" alt="Download APK" />
+    <img src="https://img.shields.io/badge/Download-APK%20(v0.2.12)-2962FF?style=for-the-badge&logo=android&logoColor=white" alt="Download APK" />
   </a>
 </p>
 
@@ -38,11 +38,11 @@ Download the pre-compiled Android package (`.apk`) directly to your phone:
 * 📱 **[ดาวน์โหลด RideLink-Thai-v0.2.12.apk](https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.12/RideLink-Thai-v0.2.12.apk)** สำหรับ Android 10 ขึ้นไป
 * 📦 **[All Release Versions on GitHub Releases](https://github.com/maxplane-KKR/RideLink-Thai/releases)**
 
-APK นี้มีปุ่ม **ตั้งค่า → OBD2 ที่แนะนำ → เลือกซื้อ** และแสดงเวอร์ชัน `0.2.12` ในแอป
+รุ่น `0.2.12` (`versionCode 14`) ปรับความเร็วในการเชื่อมต่อหน้าปัดรถ รวมปุ่มควบคุมหลักเป็นปุ่มเดียว (**เริ่มเชื่อมต่อ ⇄ หยุดเชื่อมต่อ** กดหยุดครั้งเดียวจบเซสชัน) และมีเมนู **ตั้งค่า → OBD2 ที่แนะนำ → เลือกซื้อ**
 
 SHA-256: `c1cb51386da9837490a39c22792445ce1407ea44767bd4f8fe1f2cb21baee8be`
 
-**สำหรับผู้ใช้ 0.2.9** รุ่น 0.2.12 ใช้ลายเซ็นต่างจาก 0.2.9 จึงต้องถอนรุ่นเดิมก่อนติดตั้ง การถอนอาจลบข้อมูลและการตั้งค่าในแอป โปรดจดข้อมูลที่ต้องการเก็บก่อนดำเนินการ
+**การอัปเดต:** ผู้ใช้รุ่น `0.2.11` ติดตั้งทับได้ทันที ส่วนผู้ใช้ `0.2.9` ต้องถอนรุ่นเดิมก่อนติดตั้งเพราะใช้ลายเซ็นต่างกัน (การถอนอาจลบข้อมูลและการตั้งค่าในแอป โปรดจดข้อมูลที่ต้องการเก็บก่อนดำเนินการ)
 
 ---
 
@@ -59,7 +59,7 @@ Instead of simple screen-casting that mirrors your phone's lockscreen or forces 
 ## 🚀 Key Features
 
 * **🏎️ Direct Cluster Projection**: Full Android Auto experience on your dashboard (Google Maps, Waze, Spotify, YouTube Music, Phone calls, Messaging).
-* **⚡ เชื่อมต่อรถผ่าน Wi-Fi**: สแกน QR หรือบันทึก Wi-Fi รถ แล้วเริ่มเชื่อมต่อจากแดชบอร์ด
+* **⚡ เชื่อมต่อรถผ่าน Wi-Fi**: สแกน QR รถครั้งแรก แล้วกดปุ่มสลับ **เริ่มเชื่อมต่อ ⇄ หยุดเชื่อมต่อ** จากแดชบอร์ดได้ในปุ่มเดียว
 * **🎛️ หน้าปัดสด 14 ธีม**: แสดงความเร็วจาก GPS และข้อมูลที่ ECU รองรับผ่านตัวอ่าน OBD2
 * **🎮 Built-In Cockpit Controls (For Non-Touch Screens)**:
   * Dedicated **Virtual Joystick** (D-Pad navigation)
