@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.net.LinkAddress
 import android.net.Network
 import android.net.wifi.WifiManager
+import android.os.SystemClock
 import java.io.BufferedInputStream
 import java.io.IOException
 import java.io.OutputStream
@@ -126,9 +127,14 @@ class EasyConnProber(
     @Volatile private var bikeIp: Inet4Address? = null
     @Volatile private var network: Network? = null
     private val liveConns = AtomicInteger(0)
+    private val dialbackSignal = Object()
     @Volatile private var everConnected = false
     @Volatile private var reprobing = false
     @Volatile private var reconnectAttempts = 0
+    @Volatile private var probeAcceptedAtMs = 0L
+    @Volatile private var firstConnectAtMs = 0L
+    @Volatile private var lastRecoveryAtMs = 0L
+    @Volatile private var exhaustedRetries = false
     private val tftPortsProbed = AtomicBoolean(false)
 
     /** One connection-only check per demo session; no login, payload, or remote commands. */
@@ -168,6 +174,10 @@ class EasyConnProber(
         probed = false
         framesSent = 0
         lastFrameAt = 0L
+        probeAcceptedAtMs = 0L
+        firstConnectAtMs = 0L
+        lastRecoveryAtMs = 0L
+        exhaustedRetries = false
         everConnected = false
         reconnectAttempts = 0
         tftPortsProbed.set(false)
@@ -266,7 +276,7 @@ class EasyConnProber(
         }
         video = null
         ownsVideo = false
-        lastFrameAt = System.currentTimeMillis()
+        lastFrameAt = SystemClock.elapsedRealtime()
         log("[MAP] detached video source (PXC kept)")
     }
 
@@ -285,6 +295,10 @@ class EasyConnProber(
         probed = false
         everConnected = false
         reprobing = false
+        exhaustedRetries = false
+        probeAcceptedAtMs = 0L
+        firstConnectAtMs = 0L
+        synchronized(dialbackSignal) { dialbackSignal.notifyAll() }
         probeThread?.interrupt(); probeThread = null
         nsdThread?.interrupt(); nsdThread = null
         reprobeThread?.interrupt(); reprobeThread = null
@@ -332,7 +346,7 @@ class EasyConnProber(
     fun msSinceLastFrame(): Long {
         val yAt = 0L
         val at = maxOf(lastFrameAt, yAt)
-        return if (at == 0L) Long.MAX_VALUE else System.currentTimeMillis() - at
+        return if (at == 0L) Long.MAX_VALUE else (SystemClock.elapsedRealtime() - at).coerceAtLeast(0L)
     }
 
     /**
@@ -367,8 +381,18 @@ class EasyConnProber(
     fun rearmFromError() {
         if (!running || liveConns.get() > 0) return
         log("[watchdog] re-arming reconnect after error")
+        exhaustedRetries = false
         reconnectAttempts = 0
         onAllConnectionsClosed()
+    }
+
+    private fun kickProbeThread() {
+        val bi = bikeIp ?: return
+        val mi = myIp ?: return
+        if (!running || probeThread?.isAlive == true) return
+        probeThread = thread(name = "ec-probe", isDaemon = true) {
+            discoverAndProbe(bi, mi, network)
+        }
     }
 
     /**
@@ -379,59 +403,101 @@ class EasyConnProber(
         BikeWifi.rebindProcessToBike(context)
 
         var waitingNotified = false
-        while (running && !probed && !Thread.currentThread().isInterrupted) {
-            EasyConnProbeCoordinator.discoverAndProbe(
-                gatewayHost = bikeIp,
-                directPort = BIKE_PROBE_PORT,
-                isRunning = { running && !probed },
-                probe = { host, port, attempts, connectTimeoutMs ->
-                    probeTarget(host, port, myIp, network, attempts = attempts, connectTimeoutMs = connectTimeoutMs)
-                    probed
-                },
-                discoverNsdAsync = { onComplete ->
-                    val finished = AtomicBoolean(false)
-                    val t = thread(name = "ec-nsd", isDaemon = true) {
-                        val ep = try {
-                            EasyConnDiscovery.discoverNsd(
-                                context = context,
-                                log = log,
-                                network = network,
-                                isCancelled = { !running || probed || finished.get() },
+        while (running && liveConns.get() == 0 && !Thread.currentThread().isInterrupted) {
+            if (!probed) {
+                EasyConnProbeCoordinator.discoverAndProbe(
+                    gatewayHost = bikeIp,
+                    directPort = BIKE_PROBE_PORT,
+                    isRunning = { running && !probed && liveConns.get() == 0 },
+                    probe = { host, port, attempts, connectTimeoutMs ->
+                        probeTarget(host, port, myIp, network, attempts = attempts, connectTimeoutMs = connectTimeoutMs)
+                        probed
+                    },
+                    discoverNsdAsync = { onComplete ->
+                        val finished = AtomicBoolean(false)
+                        val t = thread(name = "ec-nsd", isDaemon = true) {
+                            val ep = try {
+                                EasyConnDiscovery.discoverNsd(
+                                    context = context,
+                                    log = log,
+                                    network = network,
+                                    isCancelled = { !running || probed || liveConns.get() > 0 || finished.get() },
+                                )
+                            } catch (_: Exception) {
+                                null
+                            }
+                            if (finished.compareAndSet(false, true)) {
+                                if (nsdThread === Thread.currentThread()) nsdThread = null
+                                onComplete(ep?.let { it.host to it.port })
+                            }
+                        }
+                        nsdThread = t
+                        {
+                            if (finished.compareAndSet(false, true)) {
+                                if (nsdThread === t) nsdThread = null
+                                t.interrupt()
+                                onComplete(null)
+                            } else if (nsdThread === t) {
+                                nsdThread = null
+                            }
+                        }
+                    },
+                    scanOpenPorts = {
+                        if (!waitingNotified) {
+                            EasyConnDiscovery.scanOpenPorts(
+                                bikeIp,
+                                network,
+                                myIp,
+                                ::openOnBikeNetwork,
+                                log,
+                                isRunning = { running && !probed && liveConns.get() == 0 },
                             )
-                        } catch (_: Exception) {
-                            null
+                        } else {
+                            emptyList()
                         }
-                        if (finished.compareAndSet(false, true)) {
-                            if (nsdThread === Thread.currentThread()) nsdThread = null
-                            onComplete(ep?.let { it.host to it.port })
+                    },
+                    nsdFinalWaitMs = if (waitingNotified) 2_500L else 5_000L,
+                )
+            }
+            if (!running || liveConns.get() > 0) return
+
+            if (probed) {
+                val deadline = SystemClock.elapsedRealtime() + PxcLinkSupervisor.DIALBACK_TIMEOUT_MS
+                synchronized(dialbackSignal) {
+                    while (running && probed && liveConns.get() == 0) {
+                        val remaining = deadline - SystemClock.elapsedRealtime()
+                        if (remaining <= 0L) break
+                        try {
+                            dialbackSignal.wait(remaining)
+                        } catch (_: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            return
                         }
                     }
-                    nsdThread = t
-                    {
-                        if (finished.compareAndSet(false, true)) {
-                            if (nsdThread === t) nsdThread = null
-                            t.interrupt()
-                            onComplete(null)
-                        } else if (nsdThread === t) {
-                            nsdThread = null
-                        }
-                    }
-                },
-                scanOpenPorts = {
-                    if (!waitingNotified) {
-                        EasyConnDiscovery.scanOpenPorts(
-                            bikeIp, network, myIp, ::openOnBikeNetwork, log, isRunning = { running && !probed },
-                        )
-                    } else {
-                        emptyList()
-                    }
-                },
-            )
-            if (probed || !running) return
+                }
+                if (!running || liveConns.get() > 0) return
+                if (probed && liveConns.get() == 0 && running) {
+                    log(
+                        "[watchdog] bike accepted :$BIKE_PROBE_PORT probe but did not dial back in " +
+                            "${PxcLinkSupervisor.DIALBACK_TIMEOUT_MS}ms — re-probing",
+                    )
+                    probed = false
+                    probeAcceptedAtMs = 0L
+                    lastRecoveryAtMs = SystemClock.elapsedRealtime()
+                    continue
+                }
+            }
 
             if (!everConnected) {
                 // Kove / Thinkerride SoftAP: neither EasyConn nor Yunmo — log open ports once for RE.
-                if (!waitingNotified && running) {
+                val savedQr = BikeMemory.lastQr(context)
+                if (!waitingNotified && running &&
+                    PxcLinkSupervisor.shouldRunThinkerrideScan(
+                        BikeProfileHolder.active,
+                        savedQr?.ssid,
+                        savedQr?.modelId,
+                    )
+                ) {
                     EasyConnDiscovery.scanThinkerridePorts(
                         bikeIp, network, myIp, ::openOnBikeNetwork, log, isRunning = { running && !probed },
                     )
@@ -516,6 +582,7 @@ class EasyConnProber(
                     log("[PROBE] <- cmd=0x${resp.cmd.toUInt().toString(16)} $body")
                     if (resp.cmd == PxcFrame.CMD_MDNS_RESPOND_ACK && body.contains("true")) {
                         log("[PROBE] *** accepted — bike should now connect back to our ports ***")
+                        probeAcceptedAtMs = SystemClock.elapsedRealtime()
                         probed = true
                     } else {
                         log("[PROBE] !! not accepted: $body")
@@ -599,18 +666,35 @@ class EasyConnProber(
                 }
                 log("[:$port] <<< bike connected from ${client.remoteSocketAddress}")
                 everConnected = true
+                exhaustedRetries = false
                 reconnectAttempts = 0            // a fresh connection resets the retry budget
-                liveConns.incrementAndGet()
+                synchronized(dialbackSignal) {
+                    if (liveConns.get() == 0 || firstConnectAtMs == 0L) {
+                        firstConnectAtMs = SystemClock.elapsedRealtime()
+                    }
+                    liveConns.incrementAndGet()
+                    dialbackSignal.notifyAll()
+                }
                 activeClients.add(client)
                 thread(name = "ec-conn-$port", isDaemon = true) {
                     try { readLoop(port, client) }
                     finally {
                         activeClients.remove(client)
-                        if (liveConns.decrementAndGet() == 0) onAllConnectionsClosed()
+                        if (liveConns.decrementAndGet() == 0) {
+                            firstConnectAtMs = 0L
+                            onAllConnectionsClosed()
+                        }
                     }
                 }
             }
         }
+
+    private fun markRetriesExhausted() {
+        lastRecoveryAtMs = SystemClock.elapsedRealtime()
+        exhaustedRetries = true
+        log("[reconnect] gave up after $reconnectAttempts attempts — tap Connect to retry")
+        publishProjectionState { ConnectionState.set(Phase.ERROR, R.string.conn_detail_link_lost) }
+    }
 
     /**
      * All bike sockets have closed. If we're still running and the link had connected at least once,
@@ -623,8 +707,7 @@ class EasyConnProber(
         handshake.projectionVersions = null
         if (reprobing) return
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            log("[reconnect] gave up after $reconnectAttempts attempts — tap Connect to retry")
-            publishProjectionState { ConnectionState.set(Phase.ERROR, R.string.conn_detail_link_lost) }
+            markRetriesExhausted()
             return
         }
         reprobing = true
@@ -642,9 +725,10 @@ class EasyConnProber(
                     val bi = bikeIp; val mi = myIp
                     if (bi == null || mi == null) { log("[reconnect] no cached IPs — abort"); return@thread }
                     probed = false
+                    probeAcceptedAtMs = 0L
                     framesSent = 0   // so the first frame after reconnect re-signals STREAMING
-                    
-                    
+                    lastFrameAt = 0L
+
                     // Fast path for reconnect — classic wake → NSD → Yunmo SoftAP :8200.
                     probeTarget(bi, BIKE_PROBE_PORT, mi, network, attempts = 2, connectTimeoutMs = 1_500)
                     if (!probed && running && liveConns.get() == 0) {
@@ -658,6 +742,13 @@ class EasyConnProber(
                     }
                     // Give the dash a moment to connect back before deciding to try again.
                     try { Thread.sleep(2500) } catch (_: InterruptedException) { return@thread }
+                    if (liveConns.get() == 0) {
+                        probed = false
+                        probeAcceptedAtMs = 0L
+                    }
+                }
+                if (running && liveConns.get() == 0 && reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+                    markRetriesExhausted()
                 }
             } finally {
                 reprobing = false
@@ -824,7 +915,7 @@ class EasyConnProber(
                     sendFrameRaw(out, frame)
                     if (video != null && video === AaVideoBridge.pipeline) RideScreenLiveDashboard.videoFrameSent()
                     framesSent++
-                    lastFrameAt = System.currentTimeMillis()
+                    lastFrameAt = SystemClock.elapsedRealtime()
                     if (framesSent == 1 && running) {
                         val versions = handshake.projectionVersions
                         publishProjectionState { ConnectionState.setProjectionStreaming(versions) }
@@ -1036,11 +1127,10 @@ class EasyConnProber(
     private fun pickBikeInterfaceIp(network: Network?): Inet4Address? {
         if (network != null) {
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            cm.getLinkProperties(network)?.linkAddresses
+            return cm.getLinkProperties(network)?.linkAddresses
                 ?.map(LinkAddress::getAddress)
                 ?.filterIsInstance<Inet4Address>()
                 ?.firstOrNull { !it.isLoopbackAddress }
-                ?.let { return it }
         }
         for (nic in NetworkInterface.getNetworkInterfaces()) {
             if (!nic.isUp || nic.isLoopback) continue
@@ -1095,16 +1185,84 @@ class EasyConnProber(
         ctrlHeartbeatThreads.add(t)
     }
 
+    private fun triggerWatchdogReconnect(now: Long, reason: String) {
+        lastRecoveryAtMs = now
+        firstConnectAtMs = 0L
+        log("[watchdog] $reason")
+        val noClients = activeClients.isEmpty()
+        forceReconnect()
+        if (!everConnected && noClients) {
+            probed = false
+            probeAcceptedAtMs = 0L
+            kickProbeThread()
+        }
+    }
+
     private fun startHeartbeatLog() {
         heartbeatThread = thread(name = "ec-hb", isDaemon = true) {
-            var i = 0
+            var tick = 0
             while (running) {
-                try { Thread.sleep(5000) } catch (_: InterruptedException) { break }
-                i++
-                log(
-                    "hb#$i probed=$probed video=${video != null} framesSent=$framesSent" +
-                        " openServers=${servers.count { !it.isClosed }}",
+                try { Thread.sleep(1_000L) } catch (_: InterruptedException) { break }
+                if (!running) break
+                tick++
+                if (tick % 5 == 0) {
+                    val hbIndex = tick / 5
+                    log(
+                        "hb#$hbIndex probed=$probed video=${video != null} framesSent=$framesSent" +
+                            " openServers=${servers.count { !it.isClosed }}",
+                    )
+                }
+
+                val now = SystemClock.elapsedRealtime()
+                val pAt = probeAcceptedAtMs
+                val fcAt = firstConnectAtMs
+                val lrAt = lastRecoveryAtMs
+                val snapshot = PxcLinkSupervisor.HealthSnapshot(
+                    running = running,
+                    inErrorState = exhaustedRetries,
+                    probed = probed,
+                    liveConns = liveConns.get(),
+                    framesSent = framesSent,
+                    aaDecoding = AaVideoBridge.aaDecoding,
+                    msSinceProbeAccepted = if (pAt == 0L) 0L else (now - pAt).coerceAtLeast(0L),
+                    msSinceFirstConnect = if (fcAt == 0L) 0L else (now - fcAt).coerceAtLeast(0L),
+                    msSinceLastFrame = msSinceLastFrame(),
+                    msSinceLastRecovery = if (lrAt == 0L) Long.MAX_VALUE else (now - lrAt).coerceAtLeast(0L),
                 )
+
+                when (PxcLinkSupervisor.evaluate(snapshot)) {
+                    PxcLinkSupervisor.Action.NONE -> Unit
+                    PxcLinkSupervisor.Action.REPROBE_DIALBACK_TIMEOUT -> {
+                        if (probeThread?.isAlive != true && !reprobing) {
+                            log(
+                                "[watchdog] bike accepted :$BIKE_PROBE_PORT probe ${snapshot.msSinceProbeAccepted}ms " +
+                                    "ago with 0 live connections — re-probing",
+                            )
+                            probed = false
+                            probeAcceptedAtMs = 0L
+                            lastRecoveryAtMs = now
+                            kickProbeThread()
+                        }
+                    }
+                    PxcLinkSupervisor.Action.FORCE_RECONNECT_FIRST_FRAME_STALL -> {
+                        triggerWatchdogReconnect(
+                            now,
+                            "bike connected (${snapshot.liveConns} socket(s)) for " +
+                                "${snapshot.msSinceFirstConnect}ms with 0 frames — forcing reconnect",
+                        )
+                    }
+                    PxcLinkSupervisor.Action.FORCE_RECONNECT_STREAM_STALL -> {
+                        triggerWatchdogReconnect(
+                            now,
+                            "stream stalled (${snapshot.msSinceLastFrame}ms since frame #$framesSent, " +
+                                "aaDecoding=${snapshot.aaDecoding}) — forcing reconnect",
+                        )
+                    }
+                    PxcLinkSupervisor.Action.REARM_FROM_ERROR -> {
+                        lastRecoveryAtMs = now
+                        rearmFromError()
+                    }
+                }
             }
         }
     }

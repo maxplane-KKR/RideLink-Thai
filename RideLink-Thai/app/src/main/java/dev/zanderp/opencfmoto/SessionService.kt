@@ -35,6 +35,7 @@ class SessionService : Service() {
         const val ACTION_LIVE_DASHBOARD = "app.ridelink.thai.ACTION_LIVE_DASHBOARD"
         const val EXTRA_LIVE_ATTEMPT = "app.ridelink.thai.EXTRA_LIVE_ATTEMPT"
         const val EXTRA_CONNECT_REQUESTED_AT = "app.ridelink.thai.EXTRA_CONNECT_REQUESTED_AT"
+        const val EXTRA_FORCE_BIKE_RECONNECT = "app.ridelink.thai.EXTRA_FORCE_BIKE_RECONNECT"
         private const val CHANNEL_ID = "ridelink_service_channel"
         private const val NOTIFICATION_ID = 2026
         private const val HIDDEN_STANDBY_TIMEOUT_MS = 15_000L
@@ -111,11 +112,9 @@ class SessionService : Service() {
         val targetClean = targetSsid?.trim('"', ' ')
         val allNets = cm.allNetworks
 
-        // 0. Network ที่ BikeWifi ถืออยู่แล้วและยังเป็น Wi-Fi ให้ใช้ต่อทันที
-        BikeWifi.currentNetwork?.let { held ->
-            if (cm.getNetworkCapabilities(held)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
-                return held
-            }
+        // 0. Network ที่ BikeWifi ถืออยู่แล้วและพร้อมใช้งานจริง ให้ใช้ต่อทันที
+        if (BikeWifi.isCurrentNetworkUsable(this)) {
+            BikeWifi.currentNetwork?.let { return it }
         }
 
         // 1. Direct SSID match via NetworkCapabilities (Android 10+)
@@ -226,7 +225,12 @@ class SessionService : Service() {
         val now = SystemClock.elapsedRealtime()
         val requestedAt = intent?.getLongExtra(EXTRA_CONNECT_REQUESTED_AT, now)
             ?.takeIf { it in 0..now && now - it <= 60_000L } ?: now
-        startSession(projectionRequested = true, requestedAtMs = requestedAt)
+        val forceBikeReconnect = intent?.getBooleanExtra(EXTRA_FORCE_BIKE_RECONNECT, false) == true
+        startSession(
+            projectionRequested = true,
+            requestedAtMs = requestedAt,
+            forceBikeReconnect = forceBikeReconnect,
+        )
         updateStandbyTimeout()
         return START_STICKY
     }
@@ -269,6 +273,7 @@ class SessionService : Service() {
     private fun startSession(
         projectionRequested: Boolean,
         requestedAtMs: Long = SystemClock.elapsedRealtime(),
+        forceBikeReconnect: Boolean = false,
     ) {
         if (!isRunning) ensureForeground(projectionRequested)
         try {
@@ -287,6 +292,7 @@ class SessionService : Service() {
                 error = ConnectionState.phase == Phase.ERROR,
                 wifiPickerError = ConnectionState.detail.isResource(R.string.conn_detail_wifi_picker),
                 headunitLive = AaVideoBridge.headunitSessionLive,
+                forceBikeReconnect = forceBikeReconnect,
             )
             if (decision == SessionStartPolicy.Action.REUSE_PROJECTION) {
                 TftDiagnostics.markConnectionStartup(ConnectionStartupStage.REPEAT_REQUEST, requestedAtMs)
@@ -475,12 +481,6 @@ class SessionService : Service() {
         bikeConnectionStartedAtElapsed = SystemClock.elapsedRealtime()
         TftDiagnostics.recordBikeConnectionStart(qr?.modelId)
         try {
-            val preExisting = findActiveBikeNetwork(qr?.ssid)
-            if (preExisting != null) {
-                LogBus.log("[Session] ตรวจพบ Wi-Fi รถเชื่อมต่ออยู่แล้ว: $preExisting")
-                bikeNetwork = preExisting
-            }
-
             if (qr != null) {
                 TftDiagnostics.markConnectionStartup(ConnectionStartupStage.WIFI_REQUESTED)
                 BikeWifi.reuseOrJoin(
@@ -495,6 +495,13 @@ class SessionService : Service() {
                             if (isNewNet && proberActiveNetwork != null && proberActiveNetwork != net) {
                                 // Re-acquired a fresh Wi-Fi Network mid-ride -> force PXC re-probe
                                 proberActiveNetwork = null
+                            }
+                            if ((ConnectionState.phase == Phase.ERROR &&
+                                    ConnectionState.detail.isResource(R.string.conn_detail_wifi_picker)) ||
+                                (ConnectionState.phase == Phase.WAITING_FOR_BIKE &&
+                                    ConnectionState.detail.isResource(R.string.conn_detail_wifi_searching))
+                            ) {
+                                ConnectionState.set(Phase.PXC_CONNECTING, "")
                             }
                             maybeHandoffToPxc(attempt)
                         }
@@ -512,8 +519,14 @@ class SessionService : Service() {
                     log = { LogBus.log("[WiFi] $it") }
                 )
             } else {
-                val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                if (bikeNetwork == null) bikeNetwork = cm.activeNetwork
+                val preExisting = findActiveBikeNetwork(null)
+                if (preExisting != null) {
+                    LogBus.log("[Session] ตรวจพบ Wi-Fi รถเชื่อมต่ออยู่แล้ว: $preExisting")
+                    bikeNetwork = preExisting
+                } else {
+                    val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                    if (bikeNetwork == null) bikeNetwork = cm.activeNetwork
+                }
             }
             maybeHandoffToPxc(attempt)
         } catch (e: Exception) {
@@ -530,8 +543,8 @@ class SessionService : Service() {
         if (!bikeCallbacks.isCurrent(attempt) || !isRunning || !isProjectionRequested) return
         val bikeStartedAt = bikeConnectionStartedAtElapsed ?: return
 
-        // If bikeNetwork is null, check active Wi-Fi in background (watchdog polling)
-        if (bikeNetwork == null) {
+        // If bikeNetwork is null and no specifier picker/request is in flight, poll active Wi-Fi
+        if (bikeNetwork == null && !BikeWifi.hasActiveSpecifierWait()) {
             val savedBike = BikeMemory.selected(this)
             val detected = findActiveBikeNetwork(savedBike?.qr?.ssid)
             if (detected != null) {
@@ -549,7 +562,7 @@ class SessionService : Service() {
         val elapsed = SystemClock.elapsedRealtime() - bikeStartedAt
         val decision = ProjectionHarness.evaluatePxcHandoff(
             hasBikeNetwork = net != null,
-            proberActiveOnSameNetwork = net != null && net == proberActiveNetwork && prober != null,
+            proberActiveOnSameNetwork = net != null && net == proberActiveNetwork && prober?.isRunning == true,
             aaSteadyOrDecoding = AaVideoBridge.aaDecoding || AaVideoBridge.currentFps > 0,
             elapsedSinceSessionStartMs = elapsed,
             headunitSessionLive = AaVideoBridge.headunitSessionLive,
@@ -581,7 +594,7 @@ class SessionService : Service() {
         val generation = ++proberGeneration
         try {
             prober?.stop()
-            prober = EasyConnProber(
+            val p = EasyConnProber(
                 context = this,
                 publishProjectionState = { update ->
                     bikeCallbacks.dispatch(attempt) {
@@ -589,8 +602,17 @@ class SessionService : Service() {
                     }
                 },
                 log = { LogBus.log("[PXC] $it") },
-            ).apply {
-                start(network)
+            )
+            prober = p
+            p.start(network)
+            if (!p.isRunning && ConnectionState.phase != Phase.ERROR) {
+                prober = null
+                proberActiveNetwork = null
+                bikeCallbacks.scheduleRetry(attempt, 1_000L) {
+                    if (ConnectionState.phase != Phase.ERROR) {
+                        maybeHandoffToPxc(attempt)
+                    }
+                }
             }
         } catch (e: Exception) {
             LogBus.log("[Session] startProber error: $e")
@@ -598,7 +620,7 @@ class SessionService : Service() {
     }
 
     /** รีเซ็ตเฉพาะลิงก์รถ (Wi-Fi/PXC) โดยไม่แตะ AaReceiver หรือ VideoPipeline */
-    private fun resetBikeLinkOnly() {
+    private fun resetBikeLinkOnly(rejoinWifi: Boolean = true) {
         encoderCleanupGeneration++
         bikeCallbacks.end()
         TftDiagnostics.stopConnectionStartup()
@@ -606,6 +628,11 @@ class SessionService : Service() {
         bikeConnectionStartedAtElapsed = null
         try { prober?.stop() } catch (_: Exception) {}
         prober = null
+        if (rejoinWifi) {
+            try {
+                BikeWifi.leave(this) { LogBus.log("[WiFi] $it") }
+            } catch (_: Exception) {}
+        }
         bikeNetwork = null
     }
 

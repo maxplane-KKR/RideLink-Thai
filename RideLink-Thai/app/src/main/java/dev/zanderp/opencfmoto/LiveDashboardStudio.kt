@@ -131,7 +131,7 @@ internal class LiveDashboardStudio(
         liveStyleStatus.text = labels.getString(R.string.ridescreen_live_style_selected,
             liveSettings.design.label, labels.getString(theme))
         val image = SelectedDashboardRenderer.render(
-            400, 184, LiveDashboardData(), liveSettings,
+            400, 184, LiveDashboardData(clockText = DashboardClock.formatNow()), liveSettings,
             labels.getString(R.string.ridescreen_live_no_vehicle_data), standalone = true,
         )
         livePreview.setImageBitmap(image)
@@ -211,7 +211,7 @@ internal class LiveDashboardStudio(
             worker.execute {
                 if (Thread.currentThread().isInterrupted) return@execute
                 val image = SelectedDashboardRenderer.render(
-                    320, 147, LiveDashboardData(), settings.copy(design = design),
+                    320, 147, LiveDashboardData(clockText = DashboardClock.formatNow()), settings.copy(design = design),
                     labels.getString(R.string.ridescreen_live_no_vehicle_data), standalone = true,
                 )
                 activity.runOnUiThread {

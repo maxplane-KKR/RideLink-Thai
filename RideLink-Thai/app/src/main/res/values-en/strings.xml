@@ -13,6 +13,7 @@
     <string name="conn_stopped">Disconnected</string>
     <string name="conn_error">Connection error</string>
     <string name="conn_detail_wifi_picker">Select the bike Wi-Fi network</string>
+    <string name="conn_detail_wifi_searching">Searching for bike Wi-Fi (attempt %1$d) — keep the QR menu open on the bike</string>
     <string name="conn_detail_easyconn_offline">The bike display is not ready for EasyConn</string>
     <string name="setup_auto_day_night">Auto (day / night)</string>
     <string name="pref_map_theme_day">Day (light)</string>

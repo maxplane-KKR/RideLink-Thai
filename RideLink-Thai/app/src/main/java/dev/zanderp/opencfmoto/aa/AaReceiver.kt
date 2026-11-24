@@ -511,7 +511,7 @@ class AaReceiver(
         } catch (e: Exception) {
             consecutiveRefusals++
             if (!sessionBusy()) AaVideoBridge.headunitStatus = HeadunitLinkStatus.REFUSED
-            if (consecutiveRefusals <= 2 || consecutiveRefusals % 5 == 0) {
+            if (consecutiveRefusals <= 2 || consecutiveRefusals == 5 || consecutiveRefusals == 10 || consecutiveRefusals % 30 == 0) {
                 log(
                     "[AA] head unit server :$HEADUNIT_SERVER_PORT no answer " +
                         "(try $consecutiveRefusals) — ${e.javaClass.simpleName}: ${e.message}",

@@ -219,7 +219,7 @@ class MainActivity : AppCompatActivity() {
         if (result.resultCode == Activity.RESULT_OK) {
             refreshSavedBikeInfo()
             initSettingsState()
-            startAutoProjection(getString(R.string.scan_auto_start))
+            startAutoProjection(getString(R.string.scan_auto_start), forceBikeReconnect = true)
         }
     }
 
@@ -460,7 +460,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Starts [SessionService], which verifies the head unit before joining the bike network. */
-    private fun startAutoProjection(toastMsg: String) {
+    private fun startAutoProjection(toastMsg: String, forceBikeReconnect: Boolean = false) {
         val requestedAt = SystemClock.elapsedRealtime()
         if (!headunitSetupComplete) {
             checkServerPort()
@@ -471,6 +471,7 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, SessionService::class.java).apply {
             action = SessionService.ACTION_START
             putExtra(SessionService.EXTRA_CONNECT_REQUESTED_AT, requestedAt)
+            putExtra(SessionService.EXTRA_FORCE_BIKE_RECONNECT, forceBikeReconnect)
         }
         ContextCompat.startForegroundService(this, intent)
         Toast.makeText(this, toastMsg, Toast.LENGTH_SHORT).show()

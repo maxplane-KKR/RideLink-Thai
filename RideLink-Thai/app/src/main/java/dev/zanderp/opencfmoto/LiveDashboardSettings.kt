@@ -50,6 +50,7 @@ internal data class LiveDashboardData(
     val absoluteLoad: Double? = null,
     val relativeThrottle: Double? = null,
     val obdLive: Boolean = false,
+    val clockText: String? = null,
 )
 
 internal data class LiveDashboardSettings(

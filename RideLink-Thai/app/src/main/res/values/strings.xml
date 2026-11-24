@@ -15,6 +15,7 @@
     <string name="conn_stopped">หยุดการเชื่อมต่อแล้ว</string>
     <string name="conn_error">เกิดข้อผิดพลาดในการเชื่อมต่อ</string>
     <string name="conn_detail_wifi_picker">กรุณาเลือก Wi-Fi จอรถ</string>
+    <string name="conn_detail_wifi_searching">กำลังค้นหา Wi-Fi จอรถ (รอบที่ %1$d) — เปิดหน้า QR บนจอรถค้างไว้</string>
     <string name="conn_detail_easyconn_offline">หน้าปัดรถยังไม่เปิดรับสัญญาณ EasyConn</string>
 
     <!-- ธีมแผนที่ (Day / Night) -->

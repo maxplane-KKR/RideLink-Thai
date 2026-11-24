@@ -112,6 +112,15 @@ internal object SelectedDashboardRenderer {
         if (settings.design == LiveDashboardDesign.RACING && "rpm" in settings.visibleFields) {
             drawRpm(canvas, data, settings, p)
         }
+        DashboardClock.draw(
+            canvas = canvas,
+            paint = paint,
+            typeface = boldFont,
+            slot = DashboardClock.slot(settings.design),
+            clockText = DashboardClock.resolve(data.clockText),
+            foregroundColor = p.foreground,
+            accentColor = p.accent,
+        )
         val sportCount = LiveDashboardSpec.fields.count { it != "speed" && it in settings.visibleFields }
         cards.zip(slots).forEach { (card, slot) -> drawCardText(canvas, slot, card, settings.design, sportCount, p) }
         canvas.restore()

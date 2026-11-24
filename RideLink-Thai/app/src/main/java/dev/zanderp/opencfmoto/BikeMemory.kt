@@ -33,6 +33,15 @@ object BikeMemory {
 
     // Per-bike winning Wi-Fi transport ("AP" | "P2P"), keyed by the (stable) dash SSID.
     private const val KEY_TRANSPORT_PREFIX = "transport_"
+    // Per-SSID last observed valid unicast Wi-Fi BSSID (never populated from QR MAC).
+    private const val KEY_BSSID_PREFIX = "wifi_bssid_"
+    private val COLON_OR_DASH_MAC = Regex("^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$")
+    private val BARE_HEX_MAC = Regex("^[0-9a-fA-F]{12}$")
+    private val INVALID_BSSID_SET = setOf(
+        "00:00:00:00:00:00",
+        "02:00:00:00:00:00",
+        "ff:ff:ff:ff:ff:ff",
+    )
 
     private fun prefs(ctx: Context) =
         ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -121,6 +130,46 @@ object BikeMemory {
     fun setWinningTransport(ctx: Context, ssid: String, transport: String) {
         if (ssid.isBlank()) return
         prefs(ctx).edit().putString("$KEY_TRANSPORT_PREFIX$ssid", transport).apply()
+    }
+
+    /** Last observed valid unicast Wi-Fi BSSID for [ssid], or null if unknown/never observed. */
+    fun lastWifiBssid(ctx: Context, ssid: String): String? {
+        if (ssid.isBlank()) return null
+        val stored = prefs(ctx).getString("$KEY_BSSID_PREFIX$ssid", null)
+        return normalizeValidUnicastBssid(stored)
+    }
+
+    /**
+     * Persist an observed valid unicast Wi-Fi BSSID for [ssid], or pass null to clear it.
+     * Invalid, placeholder, or multicast addresses are ignored so redacted values do not overwrite a valid BSSID.
+     */
+    fun setLastWifiBssid(ctx: Context, ssid: String, bssid: String?) {
+        if (ssid.isBlank()) return
+        val key = "$KEY_BSSID_PREFIX$ssid"
+        if (bssid == null) {
+            prefs(ctx).edit().remove(key).apply()
+            return
+        }
+        val normalized = normalizeValidUnicastBssid(bssid) ?: return
+        prefs(ctx).edit().putString(key, normalized).apply()
+    }
+
+    /**
+     * Normalizes [raw] to lowercase `xx:xx:xx:xx:xx:xx` and rejects blank, sentinel (`00:...`,
+     * `02:...`, `ff:...`), and multicast (`(firstOctet and 1) != 0`) addresses.
+     */
+    internal fun normalizeValidUnicastBssid(raw: String?): String? {
+        val trimmed = raw?.trim().orEmpty()
+        if (trimmed.isEmpty()) return null
+        val normalized = when {
+            COLON_OR_DASH_MAC.matches(trimmed) -> trimmed.replace('-', ':').lowercase()
+            BARE_HEX_MAC.matches(trimmed) -> trimmed.lowercase().chunked(2).joinToString(":")
+            else -> return null
+        }
+        if (normalized in INVALID_BSSID_SET) return null
+        val firstOctet = normalized.substring(0, 2).toIntOrNull(16) ?: return null
+        if ((firstOctet and 1) != 0) return null
+        return normalized
     }
 
     // ---- convenience accessors used across the app (selected bike) ----

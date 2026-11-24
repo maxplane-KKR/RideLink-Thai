@@ -52,9 +52,13 @@ internal object SessionStartPolicy {
         error: Boolean,
         wifiPickerError: Boolean,
         headunitLive: Boolean = true,
+        forceBikeReconnect: Boolean = false,
     ): Action {
         if (!requested || !running || !receiverReady || !sameConfiguration) return Action.RESTART
         if (!projecting) return Action.PROMOTE_STANDBY
+        if (forceBikeReconnect) {
+            return if (headunitLive) Action.RESTART_BIKE_LINK else Action.RESTART
+        }
         if (!error || wifiPickerError) return Action.REUSE_PROJECTION
         return if (headunitLive) Action.RESTART_BIKE_LINK else Action.RESTART
     }

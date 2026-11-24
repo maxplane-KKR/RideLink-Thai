@@ -5,21 +5,22 @@
 </p>
 
 <p align="center">
-  <strong>Wireless Android Auto Projection for Motorcycle TFT Dashboards</strong><br />
-  Stream Google Maps, Waze, Spotify, and Google Assistant directly onto your bike's built-in digital cluster — no external navigation screen required.
+  <strong>Wireless Android Auto & Live Dashboard Projection for Motorcycle TFT Displays</strong><br />
+  Stream Google Maps, Waze, Spotify, and Google Assistant — or switch to 14 customizable live dashboard themes with a built-in clock — directly on your bike's built-in TFT cluster.
 </p>
 
 <p align="center">
   <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/latest">
-    <img src="https://img.shields.io/badge/Latest%20Release-v0.2.12-00C853?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" />
+    <img src="https://img.shields.io/badge/Latest%20Release-v0.2.13-00C853?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" />
   </a>
-  <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.12/RideLink-Thai-v0.2.12.apk">
-    <img src="https://img.shields.io/badge/Download-APK%20(v0.2.12)-2962FF?style=for-the-badge&logo=android&logoColor=white" alt="Download APK" />
+  <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.13/RideLink-Thai-v0.2.13.apk">
+    <img src="https://img.shields.io/badge/Download-APK%20(v0.2.13)-2962FF?style=for-the-badge&logo=android&logoColor=white" alt="Download APK" />
   </a>
 </p>
 
 <p align="center">
   <a href="README_TH.md">🇹🇭 อ่านคู่มือภาษาไทย (Thai Guide)</a> •
+  <a href="https://ridelink-th.pages.dev/en/">🌐 Website & Live Preview</a> •
   <a href="#-quick-download">📥 Download APK</a> •
   <a href="#key-features">Key Features</a> •
   <a href="#screenshots">Screenshots</a> •
@@ -35,22 +36,26 @@
 
 Download the pre-compiled Android package (`.apk`) directly to your phone:
 
-* 📱 **[ดาวน์โหลด RideLink-Thai-v0.2.12.apk](https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.12/RideLink-Thai-v0.2.12.apk)** สำหรับ Android 10 ขึ้นไป
+* 📱 **[Download RideLink-Thai-v0.2.13.apk](https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.13/RideLink-Thai-v0.2.13.apk)** — Android 10 or later
 * 📦 **[All Release Versions on GitHub Releases](https://github.com/maxplane-KKR/RideLink-Thai/releases)**
+* 🌐 **[Interactive Preview & Recommended OBD2 Adapters](https://ridelink-th.pages.dev/en/)**
 
-รุ่น `0.2.12` (`versionCode 14`) ปรับความเร็วในการเชื่อมต่อหน้าปัดรถ รวมปุ่มควบคุมหลักเป็นปุ่มเดียว (**เริ่มเชื่อมต่อ ⇄ หยุดเชื่อมต่อ** กดหยุดครั้งเดียวจบเซสชัน) และมีเมนู **ตั้งค่า → OBD2 ที่แนะนำ → เลือกซื้อ**
+### What's New in `v0.2.13` (`versionCode 15`)
+* **More reliable repeat connections**: Added a dedicated Wi-Fi join state machine (`BikeWifiJoinMachine`) with observed-BSSID fast-path + automatic SSID fallback and DHCP readiness gating, plus a PXC dial-back & stream-stall supervisor (`PxcLinkSupervisor`) and clean QR re-scan reconnect handling.
+* **Built-in 24-hour clock on all 14 live dashboards**: Every live dashboard theme (Day and Night modes) now displays a real-time `HH:mm` clock positioned safely above the bike's bottom status strip without overlapping speed, RPM, or OBD cards.
+* **Cleaner connection diagnostics**: Reduced standby `:5277` log noise and added a dedicated recent bike-connection trace window with SSID/PSK/MAC redaction in the in-app support report.
 
-SHA-256: `c1cb51386da9837490a39c22792445ce1407ea44767bd4f8fe1f2cb21baee8be`
+SHA-256: `60bd3997a025564b4a7f34eae4fe722bb7e6c292c4aed2461ea6b81533dc90ad`
 
-**การอัปเดต:** ผู้ใช้รุ่น `0.2.11` ติดตั้งทับได้ทันที ส่วนผู้ใช้ `0.2.9` ต้องถอนรุ่นเดิมก่อนติดตั้งเพราะใช้ลายเซ็นต่างกัน (การถอนอาจลบข้อมูลและการตั้งค่าในแอป โปรดจดข้อมูลที่ต้องการเก็บก่อนดำเนินการ)
+**Updating:** Users on `0.2.11` or `0.2.12` can install `0.2.13` directly over the existing app (same signing key). Users on `0.2.9` must uninstall the old version first because it used a different signing key (uninstalling may remove app data and settings, so note anything you want to keep first).
 
 ---
 
 ## 🌟 Overview
 
-**RideLink TH** bridges modern **Android Auto** directly to motorcycle TFT displays running EasyConn / Carbit PXC mirroring protocols (such as **Zontes**, **CFMoto**, and other smart digital clusters). 
+**RideLink TH** bridges modern **Android Auto** directly to motorcycle TFT displays running EasyConn / Carbit PXC mirroring protocols (such as **Zontes**, **CFMoto**, and other smart digital clusters).
 
-Instead of simple screen-casting that mirrors your phone's lockscreen or forces portrait distortion, **RideLink TH** spins up a local hardware-accelerated Android Auto receiver, renders standard widescreen/landscape AA Coolwalk UI, and encodes the stream into an H.264 video feed tailored to your motorcycle's native dashboard resolution and aspect ratio.
+Instead of basic screen-casting that mirrors your phone's lockscreen or forces portrait distortion, **RideLink TH** runs a local hardware-accelerated Android Auto receiver, renders standard landscape Android Auto Coolwalk UI, and encodes the stream into an H.264 video feed tailored to your motorcycle's native dashboard resolution and aspect ratio.
 
 ---
 
@@ -59,20 +64,15 @@ Instead of simple screen-casting that mirrors your phone's lockscreen or forces 
 ## 🚀 Key Features
 
 * **🏎️ Direct Cluster Projection**: Full Android Auto experience on your dashboard (Google Maps, Waze, Spotify, YouTube Music, Phone calls, Messaging).
-* **⚡ เชื่อมต่อรถผ่าน Wi-Fi**: สแกน QR รถครั้งแรก แล้วกดปุ่มสลับ **เริ่มเชื่อมต่อ ⇄ หยุดเชื่อมต่อ** จากแดชบอร์ดได้ในปุ่มเดียว
-* **🎛️ หน้าปัดสด 14 ธีม**: แสดงความเร็วจาก GPS และข้อมูลที่ ECU รองรับผ่านตัวอ่าน OBD2
+* **⚡ Reliable Wireless Bike Connection**: Scan the bike's QR code once, then use the single toggle button (**Connect ⇄ Stop**) on the dashboard — one tap stops the entire session cleanly.
+* **🎛️ 14 Live Dashboard Themes with Live Clock**: Choose from 14 Day/Night styles (*Horizon, Sport, Racing, Touring, Neo Sport, Circuit, Endurance, Track Focus, Street Sport, Apex, Carbon Race, Minimal Black, Amber Classic, Stealth*) featuring a 24-hour live clock (`HH:mm`), GPS speed, and real-time ECU metrics via Bluetooth Classic (SPP) OBD2 adapters (RPM, Coolant Temp, ECU Voltage, Engine Load, Intake Temp, MAP, Relative Throttle).
 * **🎮 Built-In Cockpit Controls (For Non-Touch Screens)**:
   * Dedicated **Virtual Joystick** (D-Pad navigation)
   * **Rotary Knob Focus** & Confirm triggers
   * **Precision Glide Trackpad** with on-screen visual cursor
-* **🎯 ปรับตำแหน่งการสัมผัส**: ตั้งค่าระยะขอบและตำแหน่งภาพให้เหมาะกับหน้าจอรถ
-* **🔘 Dual-Dispatch Quick Actions**: Dedicated on-screen shortcut buttons for:
-  * **Maps** (Instant navigation toggle)
-  * **Voice Command** (Google Assistant push-to-talk)
-  * **Home / App Drawer** (Coolwalk app launcher)
-  * **Back / Dismiss**
-* **📐 Real-Time 4-Edge Margin & Scale Calibration**: Independently adjust Top, Bottom, Left, Right margins and overall Scale (70%–100%) live on the fly so motorcycle gauge templates and status bars never obscure Android Auto icons.
-* **🔋 Power Efficiency**: Adaptive framerate caps (15–60 FPS), background battery optimization, and low-latency hardware encoding.
+* **🎯 Accurate Touch & Display Calibration**: Adjust 4-edge margins (Top, Bottom, Left, Right) and overall Scale (70%–100%) live so motorcycle gauge bezels and status bars never obscure Android Auto controls.
+* **🔘 Dual-Dispatch Quick Actions**: Dedicated on-screen shortcut buttons for **Maps**, **Voice Command** (Google Assistant), **Home / App Drawer**, and **Back / Dismiss**.
+* **🔋 Power Efficiency**: Adaptive framerate caps, minute-cached live dashboard rendering, background standby timeout, and low-latency hardware H.264 encoding.
 
 ---
 
@@ -98,35 +98,36 @@ Instead of simple screen-casting that mirrors your phone's lockscreen or forces 
 ## 🛠️ Quick Start Guide
 
 ### Step 1: Enable Headunit Server in Android Auto (One-Time Setup)
-1. Open **Settings** on your Android phone and search for **Android Auto** (or tap **"เปิดหน้าตั้งค่า ANDROID AUTO"** in the app).
-2. Scroll to the very bottom and tap **Version** repeatedly (around 10 times) until Developer Mode is unlocked.
-3. Tap the **3 vertical dots menu** (top-right corner) and select **"Start headunit server"** (เริ่มเฮดยูนิตเซิร์ฟเวอร์).
+1. Open **RideLink TH** and tap **Open Android Auto** (or open **Settings → Android Auto** on your phone).
+2. Scroll to the bottom and tap **Version** repeatedly (10 times) to unlock Developer Mode.
+3. Tap the **⋮** menu (top-right corner) and select **Start head unit server**, then return to RideLink TH.
+4. Wait until the top status banner confirms **Head Unit · Running · Ready for bike**.
 
 ### Step 2: Connect to Your Motorcycle
-1. Turn on motorcycle ignition and navigate to the **Screen Mirroring / Carbit / QR Code** screen on the TFT dash.
-2. In **RideLink TH**, tap **"เริ่มเชื่อมต่อ"** (Start Connection).
-3. The app establishes the wireless link, captures the bike's gateway, and instantly forwards Android Auto live video to the dashboard.
+1. Turn on the motorcycle ignition and open the **Screen Mirroring / Carbit / QR Code** menu on the TFT display.
+2. In **RideLink TH**, tap **Scan Bike QR** the first time (or re-scan anytime to refresh the bike link).
+3. Tap **Start Connection** on the Dashboard and approve the system Wi-Fi prompt if Android shows one.
+4. Optional: Open **TFT Display → Live Dashboard** to switch to one of the 14 live themes with the built-in clock and OBD2 gauges, or browse **Settings → Recommended OBD2** for tested adapters.
 
 ---
 
 <a id="supported-motorcycles"></a>
 
-## 🏍️ รุ่นรถและหน้าจอ
+## 🏍️ Supported Motorcycles & Displays
 
-แอปมีตัวเลือกหน้าปัดสดสำหรับ Zontes 150X, 350D, 350E, 368D, 368E, 368G และ 368K ความเข้ากันได้ขึ้นอยู่กับรุ่นรถ ปีรถ เฟิร์มแวร์หน้าจอ และอุปกรณ์ที่ใช้
+Includes live dashboard presets for **Zontes 150X, 350D, 350E, 368D, 368E, 368G, and 368K**, along with EasyConn / Carbit PXC display support for compatible clusters. Actual compatibility depends on bike model, model year, cluster firmware, and phone settings.
 
 ---
 
 ## 🏗️ Building From Source
 
 ### Prerequisites
-* Android Studio Iguana / Jellyfish (or command-line tools)
-* Android SDK 34 (Build Tools 34.0.0)
+* Android SDK Platform 34 & Build Tools `34.0.0`
 * JDK 17
 * Gradle 8.9
-* PowerShell (for automated build script)
+* PowerShell (for the automated build script)
 
-### Build Debug APK
+### Build APK
 ```bash
 # Clone the repository
 git clone https://github.com/maxplane-KKR/RideLink-Thai.git
@@ -134,16 +135,15 @@ cd RideLink-Thai
 ```
 
 ```powershell
-# Using the automated build script
-.\RideLink-Thai\scripts\Build.ps1
-
+# Run unit tests, lint, and build release APK (caches stay outside OneDrive in LocalAppData)
+.\RideLink-Thai\scripts\Build.ps1 -Tasks @(':app:testReleaseUnitTest', ':app:lintAnalyzeRelease', ':app:assembleRelease')
 ```
 
-ไฟล์ APK ล่าสุดจะอยู่ในโฟลเดอร์ `APK` ที่ระดับโฟลเดอร์แม่ของ repository หากมีอยู่แล้ว หรือใน `APK` ภายใน repository ส่วนไฟล์บิลด์ชั่วคราวอยู่ใน LocalAppData
+Built debug APKs are copied to the parent `APK` directory if present (or `APK/` inside the repository), while intermediate Gradle and build caches are kept in `%LOCALAPPDATA%`.
 
 ---
 
 ## 📄 License & Attribution
 
 RideLink TH is distributed under the GNU AGPLv3 License.
-Portions of this project are adapted from open-source research by [OpenCfMoto](https://github.com/alexandru-radulescu/opencfmoto) and the [Headunit-Desktop / Headunit-Revived](https://github.com/f1xpl/aasdk) community. Special thanks to all motorcycle telemetry contributors.
+Portions of this project are adapted from open-source work by [OpenCfMoto](https://github.com/alexandru-radulescu/opencfmoto), [RideScreen AA](https://github.com/alexandru-radulescu/opencfmoto), and the [Headunit-Desktop / Headunit-Revived](https://github.com/f1xpl/aasdk) community. Special thanks to all motorcycle telemetry contributors.

@@ -11,9 +11,9 @@ class SessionStartPolicyTest {
         requested: Boolean = true, running: Boolean = true, projecting: Boolean = true,
         receiverReady: Boolean = true, sameConfiguration: Boolean = true,
         error: Boolean = false, wifiPickerError: Boolean = false,
-        headunitLive: Boolean = true,
+        headunitLive: Boolean = true, forceBikeReconnect: Boolean = false,
     ) = SessionStartPolicy.decide(requested, running, projecting, receiverReady,
-        sameConfiguration, error, wifiPickerError, headunitLive)
+        sameConfiguration, error, wifiPickerError, headunitLive, forceBikeReconnect)
 
     @Test fun duplicateConnectKeepsTheCurrentSessionAndWifiRetry() {
         assertEquals(SessionStartPolicy.Action.REUSE_PROJECTION, decide())
@@ -93,5 +93,28 @@ class SessionStartPolicyTest {
             decide(projecting = false, sameConfiguration = first == repeated))
         assertEquals(SessionStartPolicy.Action.REUSE_PROJECTION,
             decide(sameConfiguration = first == repeated))
+    }
+
+    @Test fun forceBikeReconnectRestartsBikeLinkWhilePreservingLiveHeadunit() {
+        assertEquals(
+            SessionStartPolicy.Action.RESTART_BIKE_LINK,
+            decide(forceBikeReconnect = true, headunitLive = true),
+        )
+        assertEquals(
+            SessionStartPolicy.Action.RESTART_BIKE_LINK,
+            decide(forceBikeReconnect = true, error = true, wifiPickerError = true, headunitLive = true),
+        )
+        assertEquals(
+            SessionStartPolicy.Action.RESTART,
+            decide(forceBikeReconnect = true, headunitLive = false),
+        )
+        assertEquals(
+            SessionStartPolicy.Action.PROMOTE_STANDBY,
+            decide(forceBikeReconnect = true, projecting = false, headunitLive = true),
+        )
+        assertEquals(
+            SessionStartPolicy.Action.RESTART,
+            decide(forceBikeReconnect = true, sameConfiguration = false, headunitLive = true),
+        )
     }
 }

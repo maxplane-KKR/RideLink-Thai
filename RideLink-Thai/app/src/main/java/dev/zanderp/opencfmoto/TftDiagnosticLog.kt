@@ -35,12 +35,37 @@ internal class TftDiagnosticLog(private val file: File, private val maxChars: In
 
 /** Persists selected diagnostic fields rather than the raw protocol log. */
 internal object TftDiagnostics {
+    private const val DIAG_SUMMARY_TAIL_LINES = 30
+    private const val TRACE_TAIL_LINES = 50
+    private const val STARTUP_WINDOW_LINES = 20
+    private const val BIKE_WINDOW_LINES = 24
+    private const val BIKE_JOIN_LOOKBACK_LINES = 10
+
     private val worker = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val scope = CoroutineScope(worker)
     private lateinit var store: TftDiagnosticLog
     private lateinit var traceStore: TftDiagnosticLog
     private lateinit var resources: Resources
     private val versionPattern = Regex("[A-Za-z0-9][A-Za-z0-9 ._/+()-]{0,63}")
+    private val standbyRefusalPattern = Regex("""head unit server :5277 no answer \(try (\d+)\)""")
+    private val quotedSecretPattern = Regex(
+        """\b(pwd|password|psk|passphrase)\s*[:=]\s*(['"])([^'"]*)\2""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val macAddressPattern = Regex("""\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b""")
+    private val wifiJoinRequestSsidPattern = Regex("""(\brequesting Wi-Fi join:\s*)(.+?)(\s*(?:…|\.\.\.|\(|—|--|\s+-|$))""")
+    private val wifiJoinedSsidPattern = Regex(
+        """(\bWi-Fi (?:joined via system auto-connect|joined|re-acquired|already joined):\s*)(.+?)(\s*(?:\(|—|--|\s+-|$))""",
+    )
+    private val labeledQuotedSsidPattern = Regex(
+        """(\b(?:ssid|group name)\s*[:=]\s*)(['"])([^'"]*)\2""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val labeledSsidPattern = Regex(
+        """(\b(?:ssid|group name)=)([^\s,'"]+)""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val carbitHexSsidPattern = Regex("""\b[0-9A-Fa-f]{16}\b""")
     private val startupTiming = ConnectionStartupTiming { event ->
         if (::store.isInitialized) record(event)
     }
@@ -61,6 +86,9 @@ internal object TftDiagnostics {
         }
     }
 
+    private fun isStandbyRefusalSpam(line: String): Boolean =
+        standbyRefusalPattern.find(line)?.groupValues?.get(1)?.toIntOrNull()?.let { it > 5 } == true
+
     internal fun isDiagnosticTraceLine(line: String): Boolean {
         val markers = listOf(
             "[Session]", "[WiFi]", "[PXC]", "[PROBE]", "[DISC]", "[profile]", "[panel]",
@@ -73,7 +101,8 @@ internal object TftDiagnostics {
             line.contains("hb#") ||
             line.contains("heartbeat #") ||
             (line.contains("sent frame #") && !line.contains("sent frame #1 ")) ||
-            line.contains("decode fps=")
+            line.contains("decode fps=") ||
+            isStandbyRefusalSpam(line)
         ) return false
         return markers.any { line.contains(it) }
     }
@@ -152,23 +181,47 @@ internal object TftDiagnostics {
 
     /** Also sanitize old persisted traces before they enter the copied support report. */
     internal fun safeTraceLine(line: String): String {
-        val safe = LogRedactor.redact(line)
+        val preMasked = quotedSecretPattern.replace(line) { m ->
+            "${m.groupValues[1]}=${m.groupValues[2]}«redacted»${m.groupValues[2]}"
+        }
+        val safe = LogRedactor.redact(preMasked)
         val rawMarkers = listOf(
             "*** CLIENT_INFO from bike ***", "→ CLIENT_INFO reply", "CHECK_SN from bike:", "→ CHECK_SN_RESULT",
         )
         for (marker in rawMarkers) {
             val at = safe.indexOf(marker)
-            if (at >= 0) return safe.substring(0, at + marker.length) + " [payload omitted]"
+            if (at >= 0) return maskTraceIdentifiers(safe.substring(0, at + marker.length) + " [payload omitted]")
         }
         if (safe.contains("CFDL26 ctrl ")) {
             val prefix = Regex("""^.*?CFDL26 ctrl\s+0x[0-9a-fA-F]+.*?\blen=\d+""").find(safe)
-            if (prefix != null) return prefix.value + " [payload omitted]"
+            if (prefix != null) return maskTraceIdentifiers(prefix.value + " [payload omitted]")
         }
         if (safe.contains("cmd=0x")) {
             val prefix = Regex("""^.*?\bcmd=0x[0-9a-fA-F]+.*?\blen=\d+""").find(safe)
-            if (prefix != null) return prefix.value + " [payload omitted]"
+            if (prefix != null) return maskTraceIdentifiers(prefix.value + " [payload omitted]")
         }
-        return safe
+        return maskTraceIdentifiers(safe)
+    }
+
+    private fun maskTraceIdentifiers(text: String): String {
+        var out = macAddressPattern.replace(text, "••:••:••:••:••:••")
+        out = wifiJoinRequestSsidPattern.replace(out) { m ->
+            m.groupValues[1] + ProjectionHarness.maskIdentifier(m.groupValues[2], masked = true) + m.groupValues[3]
+        }
+        out = wifiJoinedSsidPattern.replace(out) { m ->
+            m.groupValues[1] + ProjectionHarness.maskIdentifier(m.groupValues[2], masked = true) + m.groupValues[3]
+        }
+        out = labeledQuotedSsidPattern.replace(out) { m ->
+            m.groupValues[1] + m.groupValues[2] +
+                ProjectionHarness.maskIdentifier(m.groupValues[3], masked = true) + m.groupValues[2]
+        }
+        out = labeledSsidPattern.replace(out) { m ->
+            m.groupValues[1] + ProjectionHarness.maskIdentifier(m.groupValues[2], masked = true)
+        }
+        out = carbitHexSsidPattern.replace(out) { m ->
+            ProjectionHarness.maskIdentifier(m.value, masked = true)
+        }
+        return out
     }
 
     internal fun projectionClientInfo(field: (String) -> String?): String {
@@ -372,8 +425,12 @@ internal object TftDiagnostics {
     ): String {
         val summary = inspectEvidence(diagnosticsText)
         val diagLines = diagnosticsText.lineSequence().map(String::trim).filter(String::isNotEmpty).toList()
-        val traceLines = traceText.lineSequence().map(String::trim).filter(String::isNotEmpty)
-            .map(::safeTraceLine).toList()
+        val traceLines = traceText.lineSequence()
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .filterNot(::isStandbyRefusalSpam)
+            .map(::safeTraceLine)
+            .toList()
         val sessionStart = diagLines.indexOfLast { it.contains("bike_connection=start") }
         val currentSession = if (sessionStart >= 0) diagLines.drop(sessionStart) else emptyList()
         val liveLines = diagLines.filter { it.substringAfter(' ', it).startsWith("live_dashboard=") }.takeLast(24)
@@ -432,28 +489,79 @@ internal object TftDiagnostics {
                 }
             }
             appendLine()
-            appendLine("--- บันทึกสถานะย่อ (${diagLines.size.coerceAtMost(20)} รายการล่าสุด) ---")
+            appendLine("--- บันทึกสถานะย่อ (${diagLines.size.coerceAtMost(DIAG_SUMMARY_TAIL_LINES)} รายการล่าสุด) ---")
             if (diagLines.isEmpty()) {
                 appendLine("(ยังไม่มีบันทึกการเชื่อมรถ)")
             } else {
-                diagLines.takeLast(20).forEach { appendLine(it) }
+                diagLines.takeLast(DIAG_SUMMARY_TAIL_LINES).forEach { appendLine(it) }
             }
             if (traceLines.isNotEmpty()) {
-                val startupTrace = latestStartupTraceWindow(traceLines)
+                val tailStart = (traceLines.size - TRACE_TAIL_LINES).coerceAtLeast(0)
+                val startupRange = latestStartupTraceRange(traceLines, tailStart)
+                val startupTrace = startupRange?.let { traceLines.subList(it.first, it.last + 1) }.orEmpty()
                 if (startupTrace.isNotEmpty()) {
                     appendLine()
                     appendLine("--- ช่วงเริ่มเชื่อมล่าสุด ---")
                     startupTrace.forEach { appendLine(it) }
                 }
+                val bikeSelection = latestBikeSessionTraceRange(traceLines)
+                if (bikeSelection != null) {
+                    val (bikeRange, anchorIdx) = bikeSelection
+                    val bikeWindow = traceLines.subList(bikeRange.first, bikeRange.last + 1)
+                    val coveredByStartup = startupRange != null &&
+                        bikeRange.first in startupRange &&
+                        anchorIdx in startupRange
+                    if (bikeWindow.isNotEmpty() && bikeRange.first < tailStart && bikeWindow != startupTrace && !coveredByStartup) {
+                        appendLine()
+                        appendLine("--- ช่วงเชื่อมรถล่าสุด (Wi-Fi / PXC) ---")
+                        bikeWindow.forEach { appendLine(it) }
+                    }
+                }
                 appendLine()
-                appendLine("--- ลำดับเหตุการณ์ Wi-Fi / PXC (${traceLines.size.coerceAtMost(35)} บรรทัดล่าสุด) ---")
-                traceLines.takeLast(35).forEach { appendLine(it) }
+                appendLine("--- ลำดับเหตุการณ์ Wi-Fi / PXC (${traceLines.size.coerceAtMost(TRACE_TAIL_LINES)} บรรทัดล่าสุด) ---")
+                traceLines.takeLast(TRACE_TAIL_LINES).forEach { appendLine(it) }
             }
         }.trimEnd()
     }
 
-    private fun latestStartupTraceWindow(traceLines: List<String>): List<String> {
-        val tailStart = (traceLines.size - 35).coerceAtLeast(0)
+    private fun isBikeSessionAnchor(line: String): Boolean =
+        line.contains("[PXC] our IP=") ||
+            line.contains("[WiFi] Wi-Fi joined") ||
+            line.contains("[PROBE] *** accepted") ||
+            line.contains("sent frame #1 ")
+
+    internal fun latestBikeSessionTraceWindow(traceLines: List<String>): List<String> =
+        latestBikeSessionTraceRange(traceLines)?.let { (range, _) ->
+            traceLines.subList(range.first, range.last + 1)
+        } ?: emptyList()
+
+    private fun latestBikeSessionTraceRange(traceLines: List<String>): Pair<IntRange, Int>? {
+        val anchorIdx = traceLines.indexOfLast(::isBikeSessionAnchor)
+        if (anchorIdx < 0) return null
+
+        val lookbackStart = (anchorIdx - BIKE_JOIN_LOOKBACK_LINES).coerceAtLeast(0)
+        val joinIdx = (lookbackStart..anchorIdx)
+            .lastOrNull { traceLines[it].contains("[WiFi] requesting Wi-Fi join:") }
+        val startIdx = if (joinIdx != null) {
+            joinIdx
+        } else {
+            val prevFirstFrame = (lookbackStart until anchorIdx)
+                .lastOrNull { traceLines[it].contains("sent frame #1 ") }
+            val sessionSearchStart = if (prevFirstFrame != null) prevFirstFrame + 1 else lookbackStart
+            (sessionSearchStart..anchorIdx).firstOrNull { isBikeSessionAnchor(traceLines[it]) } ?: anchorIdx
+        }
+
+        val nextJoinAfterAnchor = ((anchorIdx + 1) until traceLines.size)
+            .firstOrNull { traceLines[it].contains("[WiFi] requesting Wi-Fi join:") }
+        val endExclusive = minOf(
+            traceLines.size,
+            startIdx + BIKE_WINDOW_LINES,
+            nextJoinAfterAnchor ?: traceLines.size,
+        )
+        return (startIdx until endExclusive) to anchorIdx
+    }
+
+    private fun latestStartupTraceRange(traceLines: List<String>, tailStart: Int): IntRange? {
         val lastJoinIdx = traceLines.indexOfLast { it.contains("[WiFi] requesting Wi-Fi join:") }
         val lastIpIdx = traceLines.indexOfLast { it.contains("[PXC] our IP=") }
         val lastStartIdx = maxOf(lastJoinIdx, lastIpIdx)
@@ -466,15 +574,15 @@ internal object TftDiagnostics {
         } else {
             lastStartIdx
         }
-        if (startIdx < 0 || startIdx >= tailStart) return emptyList()
+        if (startIdx < 0 || startIdx >= tailStart) return null
         val firstFrameAfterStart = (startIdx until traceLines.size)
             .firstOrNull { traceLines[it].contains("sent frame #1 ") }
         val endExclusive = if (firstFrameAfterStart != null) {
-            minOf(traceLines.size, firstFrameAfterStart + 2, startIdx + 20)
+            minOf(traceLines.size, firstFrameAfterStart + 2, startIdx + STARTUP_WINDOW_LINES)
         } else {
-            minOf(traceLines.size, startIdx + 20)
+            minOf(traceLines.size, startIdx + STARTUP_WINDOW_LINES)
         }
-        return traceLines.subList(startIdx, endExclusive)
+        return startIdx until endExclusive
     }
 
     suspend fun read(): String = withContext(worker) { store.read() }

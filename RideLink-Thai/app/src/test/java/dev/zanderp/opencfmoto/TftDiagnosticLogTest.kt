@@ -326,4 +326,134 @@ class TftDiagnosticLogTest {
         assertTrue(report.contains("[WiFi] requesting Wi-Fi join:"))
         assertTrue(report.contains("[PXC] sent frame #1 (1234b)"))
     }
+
+    @Test fun isDiagnosticTraceLineFiltersHighStandbyRefusalCounts() {
+        for (attempt in 1..5) {
+            assertTrue(
+                "Expected try $attempt to be retained",
+                TftDiagnostics.isDiagnosticTraceLine(
+                    "08:00:0$attempt.000  [AA] head unit server :5277 no answer (try $attempt) — ConnectException: ECONNREFUSED",
+                ),
+            )
+        }
+        for (attempt in listOf(6, 10, 110)) {
+            assertFalse(
+                "Expected try $attempt to be filtered",
+                TftDiagnostics.isDiagnosticTraceLine(
+                    "08:05:00.000  [AA] head unit server :5277 no answer (try $attempt) — ConnectException: ECONNREFUSED",
+                ),
+            )
+        }
+    }
+
+    @Test fun quickReportFiltersStandbySpamAndPreservesBikeSessionAfterLaterHomeTap() {
+        val trace = buildList {
+            add("08:10:00.100  [WiFi] requesting Wi-Fi join: A004DC0D30888555")
+            add("08:10:01.200  [WiFi] Wi-Fi joined: A004DC0D30888555 (network=105, bind deferred until AA video)")
+            add("08:10:01.250  [PXC] our IP=192.168.43.2 bike IP=192.168.43.1")
+            add("08:10:01.400  [PXC] [PROBE] *** accepted — bike should now connect back to our ports ***")
+            add("08:10:02.900  [PXC] sent frame #1 (1234b)")
+            add("08:10:02.910  [state] Connected — projecting to dash")
+            // Later brief Start tap at home with standby refusals & Wi-Fi unavailable retries
+            add("20:00:00.000  [WiFi] requesting Wi-Fi join: A004DC0D30888555")
+            add("20:00:01.000  [AA] head unit server :5277 no answer (try 1) — ConnectException: ECONNREFUSED")
+            add("20:00:08.000  [AA] head unit server :5277 no answer (try 5) — ConnectException: ECONNREFUSED")
+            for (attempt in 6..110) {
+                add("20:01:00.$attempt  [AA] head unit server :5277 no answer (try $attempt) — ConnectException: ECONNREFUSED")
+            }
+            repeat(52) { idx ->
+                add("20:02:00.$idx  [WiFi] Wi-Fi join unavailable after 25s — will retry")
+            }
+        }.joinToString("\n")
+
+        val report = TftDiagnostics.formatQuickReport(
+            diagnosticsText = "",
+            traceText = trace,
+            phoneInfo = "phone",
+            appVersion = "0.2.12",
+            activeProfileName = "Zontes",
+            savedQrModel = "48406",
+            maskedSsid = "••••••••8555",
+            headunitStatus = "REFUSED",
+            connectionPhase = "RECONNECTING",
+        )
+
+        assertFalse(report.contains("no answer (try 6)"))
+        assertFalse(report.contains("no answer (try 10)"))
+        assertFalse(report.contains("no answer (try 110)"))
+        assertTrue(report.contains("no answer (try 5)"))
+        assertTrue(report.contains("--- ช่วงเชื่อมรถล่าสุด (Wi-Fi / PXC) ---"))
+        assertTrue(report.contains("[PXC] our IP=192.168.43.2 bike IP=192.168.43.1"))
+        assertTrue(report.contains("[PROBE] *** accepted"))
+        assertTrue(report.contains("[PXC] sent frame #1 (1234b)"))
+        assertFalse(report.contains("A004DC0D30888555"))
+        assertTrue(report.contains("••••••••8555"))
+    }
+
+    @Test fun quickReportExpandsStatusAndTraceTailsAndRedactsWifiSecrets() {
+        val diagnostics = (1..32).joinToString("\n") { idx ->
+            "2026-11-24T08:00:${idx.toString().padStart(2, '0')}+07:00 connection=RECONNECTING reason=retry_$idx"
+        }
+        val traceLines = buildList {
+            add("08:00:00.100  [WiFi] requesting Wi-Fi join: A004DC0D30888555 (bssid=dc:0d:30:08:85:55 psk=\"BikeSecret99\") …")
+            repeat(49) { idx ->
+                add("08:01:00.$idx  [Session] heartbeat_event_$idx")
+            }
+        }
+        val report = TftDiagnostics.formatQuickReport(
+            diagnosticsText = diagnostics,
+            traceText = traceLines.joinToString("\n"),
+            phoneInfo = "phone",
+            appVersion = "0.2.12",
+            activeProfileName = "Zontes",
+            savedQrModel = "48406",
+            maskedSsid = "••••••••8555",
+            headunitStatus = "CONNECTED",
+            connectionPhase = "IDLE",
+        )
+
+        assertTrue(report.contains("--- บันทึกสถานะย่อ (30 รายการล่าสุด) ---"))
+        assertFalse(Regex("""\breason=retry_2\b""").containsMatchIn(report))
+        assertTrue(report.contains("reason=retry_3"))
+        assertTrue(report.contains("reason=retry_32"))
+
+        assertTrue(report.contains("--- ลำดับเหตุการณ์ Wi-Fi / PXC (50 บรรทัดล่าสุด) ---"))
+        assertTrue(report.contains("[WiFi] requesting Wi-Fi join: ••••••••8555"))
+        assertFalse(report.contains("A004DC0D30888555"))
+        assertFalse(report.contains("dc:0d:30:08:85:55"))
+        assertFalse(report.contains("BikeSecret99"))
+    }
+
+    @Test fun quickReportPreservesBikeSessionWhenLaterHomeTapIsInsideTail() {
+        val trace = buildList {
+            add("08:10:00.100  [WiFi] requesting Wi-Fi join: TEST")
+            add("08:10:01.200  [WiFi] Wi-Fi joined: TEST (network=105)")
+            add("08:10:01.250  [PXC] our IP=192.168.43.2 bike IP=192.168.43.1")
+            add("08:10:01.400  [PXC] [PROBE] *** accepted ***")
+            add("08:10:02.900  [PXC] sent frame #1 (1234b)")
+            repeat(12) { idx -> add("08:15:00.$idx  [PXC] heartbeat ok $idx") }
+            // Later brief Start tap at home inside the 50-line tail (index 17 >= tailStart 13)
+            add("20:00:00.000  [WiFi] requesting Wi-Fi join: TEST")
+            repeat(45) { idx -> add("20:01:00.$idx  [WiFi] Wi-Fi join unavailable") }
+        }
+        val window = TftDiagnostics.latestBikeSessionTraceWindow(trace)
+        assertEquals(17, window.size)
+        assertEquals("08:10:00.100  [WiFi] requesting Wi-Fi join: TEST", window.first())
+
+        val report = TftDiagnostics.formatQuickReport(
+            diagnosticsText = "",
+            traceText = trace.joinToString("\n"),
+            phoneInfo = "phone",
+            appVersion = "0.2.12",
+            activeProfileName = "Zontes",
+            savedQrModel = "48406",
+            maskedSsid = "••••••••8555",
+            headunitStatus = "REFUSED",
+            connectionPhase = "IDLE",
+        )
+        assertFalse(report.contains("--- ช่วงเริ่มเชื่อมล่าสุด ---"))
+        assertTrue(report.contains("--- ช่วงเชื่อมรถล่าสุด (Wi-Fi / PXC) ---"))
+        assertTrue(report.contains("[PXC] our IP=192.168.43.2 bike IP=192.168.43.1"))
+        assertTrue(report.contains("[PXC] sent frame #1 (1234b)"))
+    }
 }

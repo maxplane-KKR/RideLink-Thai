@@ -123,7 +123,8 @@ internal object RideScreenLiveDashboard {
             val now = SystemClock.elapsedRealtime()
             val gps = RideScreenTelemetry.dashboardData(speed, now - speedAt)
             val obd = LiveObd.status.value
-            val data = if (now - obd.receivedAt in 0..5_000L) obd.sample.applyTo(gps, now) else gps
+            val vehicleData = if (now - obd.receivedAt in 0..5_000L) obd.sample.applyTo(gps, now) else gps
+            val data = vehicleData.copy(clockText = DashboardClock.formatNow())
             val config = settings
             val cached = lastBitmap
             if (cached != null && cached.width == width && cached.height == height &&

@@ -121,6 +121,15 @@ internal object ConceptDashboardRenderer {
         canvas.scale(scale, scale)
         drawRpm(canvas, data, settings, p)
         drawSpeed(canvas, data, settings, p)
+        DashboardClock.draw(
+            canvas = canvas,
+            paint = paint,
+            typeface = labels,
+            slot = DashboardClock.slot(settings.design),
+            clockText = DashboardClock.resolve(data.clockText),
+            foregroundColor = p.foreground,
+            accentColor = p.accent,
+        )
         val sportCount = LiveDashboardSpec.fields.count { it != "speed" && it in settings.visibleFields }
         cards.zip(slots).forEach { (card, slot) -> drawCardText(canvas, slot, card, settings.design, sportCount, p) }
         canvas.restore()
@@ -230,7 +239,7 @@ internal object ConceptDashboardRenderer {
         if (s.design.hasSeparateRpmValue) {
             val value = rpm?.roundToInt()?.toString() ?: "—"
             if (s.design == LiveDashboardDesign.C04_TRACK_FOCUS) {
-                text(c, "RPM  $value", 28f, 174f, 26f, p.foreground, maxWidth = 420f)
+                text(c, "RPM  $value", 28f, 174f, 26f, p.foreground, maxWidth = 300f)
                 line(c, 28f, 181f, 452f, 181f, p.accent, 2f)
             } else {
                 text(c, "RPM  $value", 772f, 128f, 26f, p.foreground, Paint.Align.RIGHT, 248f)
