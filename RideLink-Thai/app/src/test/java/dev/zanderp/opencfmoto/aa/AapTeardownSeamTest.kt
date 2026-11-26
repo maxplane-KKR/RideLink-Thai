@@ -23,26 +23,44 @@ private class InMemoryAccessoryConnection(connected: Boolean = true) : Accessory
 }
 
 class AapTeardownSeamTest {
+    private val unexpectedResponseWait: (Long) -> Boolean = { error("must not wait") }
 
     @Test
-    fun `sends ByeBye, flushes, then closes the connection`() {
+    fun `sends ByeBye and waits for acknowledgement before closing`() {
         val conn = InMemoryAccessoryConnection()
-        val slept = mutableListOf<Long>()
         val result = AapTeardown.close(
             connection = conn,
             handshakeComplete = true,
             sendByeBye = { conn.events += "byebye"; true },
-            sleeper = { slept += it },
+            awaitByeByeResponse = {
+                assertEquals(AapTeardown.BYEBYE_RESPONSE_TIMEOUT_MS, it)
+                conn.events += "ack"
+                true
+            },
         )
         assertTrue(result.graceful)
-        assertEquals(listOf("byebye", "disconnect"), conn.events)
-        assertEquals(listOf(AapTeardown.BYEBYE_FLUSH_MS), slept)
+        assertEquals(listOf("byebye", "ack", "disconnect"), conn.events)
+    }
+
+    @Test
+    fun `a written ByeBye with no response uses unconfirmed teardown`() {
+        val conn = InMemoryAccessoryConnection()
+        val result = AapTeardown.close(
+            conn, handshakeComplete = true,
+            sendByeBye = { conn.events += "byebye"; true },
+            awaitByeByeResponse = { conn.events += "timeout"; false },
+        )
+        assertFalse(result.graceful)
+        assertEquals(listOf("byebye", "timeout", "disconnect"), conn.events)
     }
 
     @Test
     fun `skips ByeBye before handshake but still closes`() {
         val conn = InMemoryAccessoryConnection()
-        val result = AapTeardown.close(conn, handshakeComplete = false, sendByeBye = { error("must not send") })
+        val result = AapTeardown.close(
+            conn, handshakeComplete = false, sendByeBye = { error("must not send") },
+            awaitByeByeResponse = unexpectedResponseWait,
+        )
         assertFalse(result.graceful)
         assertEquals(listOf("disconnect"), conn.events)
     }
@@ -50,7 +68,10 @@ class AapTeardownSeamTest {
     @Test
     fun `a failing or throwing ByeBye never prevents the socket from closing`() {
         val conn = InMemoryAccessoryConnection()
-        val result = AapTeardown.close(conn, handshakeComplete = true, sendByeBye = { throw IllegalStateException("peer gone") })
+        val result = AapTeardown.close(
+            conn, handshakeComplete = true, sendByeBye = { throw IllegalStateException("peer gone") },
+            awaitByeByeResponse = unexpectedResponseWait,
+        )
         assertFalse(result.graceful)
         assertEquals(listOf("disconnect"), conn.events)
     }
@@ -58,13 +79,19 @@ class AapTeardownSeamTest {
     @Test
     fun `already-closed peer is not written to`() {
         val conn = InMemoryAccessoryConnection(connected = false)
-        val result = AapTeardown.close(conn, handshakeComplete = true, sendByeBye = { conn.events += "byebye"; true })
+        val result = AapTeardown.close(
+            conn, handshakeComplete = true, sendByeBye = { conn.events += "byebye"; true },
+            awaitByeByeResponse = unexpectedResponseWait,
+        )
         assertFalse(result.graceful)
         assertEquals(listOf("disconnect"), conn.events)
     }
 
     @Test
     fun `null connection is a no-op`() {
-        assertFalse(AapTeardown.close(null, handshakeComplete = true, sendByeBye = { true }).graceful)
+        assertFalse(AapTeardown.close(
+            null, handshakeComplete = true, sendByeBye = { true },
+            awaitByeByeResponse = unexpectedResponseWait,
+        ).graceful)
     }
 }

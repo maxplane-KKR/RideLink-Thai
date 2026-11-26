@@ -46,4 +46,6 @@
     <string name="pref_mirror_orient_follow">Follow phone rotation</string>
     <string name="pref_mirror_orient_land">Landscape</string>
     <string name="pref_mirror_orient_port">Portrait</string>
+    <string name="tft_issue_error_other_model">Please enter the bike model when selecting Other.</string>
+    <string name="tft_issue_error_details_required">Please describe the problem or select your bike model before sending.</string>
 </resources>

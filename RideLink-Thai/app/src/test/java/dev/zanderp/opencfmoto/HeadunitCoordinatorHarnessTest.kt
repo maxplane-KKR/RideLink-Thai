@@ -110,12 +110,59 @@ class HeadunitCoordinatorHarnessTest {
     }
 
     @Test
+    fun `transient dial and handshake failures keep standby checking`() {
+        val attempts = listOf(
+            input(consecutiveRefusals = ProjectionHarness.REFUSALS_BEFORE_GUIDANCE - 1),
+            input(consecutiveHandshakeFailures = ProjectionHarness.HANDSHAKE_FAILURES_BEFORE_GUIDANCE - 1),
+        )
+        for (attempt in attempts) {
+            val status = ProjectionHarness.confirmedHeadunitFailure(attempt)
+            assertEquals(HeadunitLinkStatus.UNKNOWN, status)
+            assertNull(ProjectionHarness.headunitGuidance(status))
+            val header = ProjectionHarness.evaluateHeadunitHeader(
+                setupComplete = true,
+                sessionRunning = true,
+                headunitLive = false,
+                androidAutoLive = false,
+                headunit = status,
+                projectionRequested = false,
+            )
+            assertEquals(R.string.headunit_header_checking, header.textRes)
+            assertEquals(UiLevel.BUSY, header.level)
+        }
+    }
+
+    @Test
+    fun `repeated dial and handshake failures report different guidance and recovery`() {
+        val attempts = mapOf(
+            HeadunitLinkStatus.REFUSED to input(consecutiveRefusals = ProjectionHarness.REFUSALS_BEFORE_GUIDANCE),
+            HeadunitLinkStatus.HANDSHAKE_FAILED to input(
+                consecutiveHandshakeFailures = ProjectionHarness.HANDSHAKE_FAILURES_BEFORE_GUIDANCE,
+            ),
+        )
+        for ((status, attempt) in attempts) {
+            val active = attempt.copy(allowSelfModeFallback = false)
+            assertEquals(status, ProjectionHarness.confirmedHeadunitFailure(active))
+            val judgment = ProjectionHarness.evaluateAaConnectStep(active)
+            assertEquals(AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED, judgment.action)
+            assertEquals(ProjectionHarness.headunitGuidance(status), judgment.reasonRes)
+            assertEquals(
+                if (status == HeadunitLinkStatus.REFUSED) AaConnectAction.DIAL_HEADUNIT_5277
+                else AaConnectAction.WAIT_FOR_HEADUNIT_RECHECK,
+                ProjectionHarness.evaluateAaConnectStep(active.copy(guidanceSurfaced = true)).action,
+            )
+        }
+    }
+
+    @Test
     fun `header distinguishes instructions and actual head unit status`() {
         fun status(setup: Boolean, running: Boolean, live: Boolean, link: HeadunitLinkStatus, aa: Boolean = live) =
             ProjectionHarness.evaluateHeadunitHeader(setup, running, live, aa, link).textRes
 
         assertEquals(R.string.headunit_header_setup, status(false, false, false, HeadunitLinkStatus.UNKNOWN))
         assertEquals(R.string.headunit_header_checking, status(false, true, false, HeadunitLinkStatus.UNKNOWN))
+        assertEquals(R.string.headunit_header_waiting_response, status(false, true, false, HeadunitLinkStatus.SERVER_REACHED))
+        assertNull(ProjectionHarness.headunitGuidance(HeadunitLinkStatus.SERVER_REACHED))
         assertEquals(R.string.headunit_header_off, status(false, true, false, HeadunitLinkStatus.REFUSED))
         assertEquals(R.string.headunit_header_ready, status(false, true, true, HeadunitLinkStatus.CONNECTED))
         assertEquals(R.string.headunit_header_unverified, status(true, false, false, HeadunitLinkStatus.CONNECTED))
@@ -159,13 +206,12 @@ class HeadunitCoordinatorHarnessTest {
     fun `repeated handshake failures select guidance for a wedged head unit server`() {
         val j = ProjectionHarness.evaluateAaConnectStep(
             input(
-                consecutiveHandshakeFailures = ProjectionHarness.HANDSHAKE_FAILURES_BEFORE_GUIDANCE,
+                consecutiveHandshakeFailures = 2,
                 selfModeFallbackTriggered = true,
             )
         )
         assertEquals(AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED, j.action)
         assertEquals(R.string.headunit_wedged, j.reasonRes)
-        // once surfaced, the coordinator keeps redialling instead of surfacing forever
         val next = ProjectionHarness.evaluateAaConnectStep(
             input(
                 consecutiveHandshakeFailures = ProjectionHarness.HANDSHAKE_FAILURES_BEFORE_GUIDANCE,
@@ -173,16 +219,26 @@ class HeadunitCoordinatorHarnessTest {
                 guidanceSurfaced = true,
             )
         )
-        assertFalse(next.action == AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED)
+        assertEquals(AaConnectAction.WAIT_FOR_HEADUNIT_RECHECK, next.action)
     }
 
     @Test
-    fun `handshake backoff is bounded`() {
-        assertEquals(
-            ProjectionHarness.MAX_RETRY_BACKOFF_MS,
-            ProjectionHarness.retryIntervalMs(consecutiveRefusals = 0, consecutiveHandshakeFailures = 50)
+    fun `a silent head unit stays paused until manually rechecked`() {
+        val waiting = ProjectionHarness.evaluateAaConnectStep(
+            input(
+                consecutiveHandshakeFailures = 2,
+                guidanceSurfaced = true,
+                msSinceLastDial = 60_000L,
+                msSinceLastTeardown = 60_000L,
+                lastTeardownGraceful = false,
+            ),
         )
-        assertEquals(0L, ProjectionHarness.retryIntervalMs(0, 0))
+        assertEquals(AaConnectAction.WAIT_FOR_HEADUNIT_RECHECK, waiting.action)
+        val rechecked = ProjectionHarness.evaluateAaConnectStep(input(
+            msSinceLastTeardown = 60_000L,
+            lastTeardownGraceful = false,
+        ))
+        assertEquals(AaConnectAction.DIAL_HEADUNIT_5277, rechecked.action)
     }
 
     // ---------------------------------------------------------------- server status UI (zero socket probes)

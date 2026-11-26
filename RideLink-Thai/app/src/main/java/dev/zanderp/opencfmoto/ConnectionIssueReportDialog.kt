@@ -2,12 +2,10 @@ package dev.zanderp.opencfmoto
 
 import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.text.InputFilter
 import android.text.InputType
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
@@ -23,12 +21,17 @@ import android.widget.TextView
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
+/**
+ * Thin Android UI adapter สำหรับการส่งรายงานปัญหาในขั้นตอนเดียว (1-step):
+ * - ปุ่มหลักเป็น "ส่งรายงาน" (`R.string.tft_issue_send`) ส่งได้ทันทีโดยไม่เปิดหน้าต่างซ้อน
+ * - มีส่วน "ดูรายละเอียดที่จะส่ง" แบบพับเก็บเริ่มต้น แสดงข้อความตรงกับที่ส่งจริงจาก [ConnectionIssueReport]
+ * - ตรวจความถูกต้องผ่าน `setOnShowListener` + positive button listener เพื่อคงหน้าต่างเปิดเมื่อข้อมูลไม่ครบ
+ */
 internal class ConnectionIssueReportDialog(
     private val activity: AppCompatActivity,
     private val evidence: ConnectionIssueEvidence,
@@ -37,135 +40,17 @@ internal class ConnectionIssueReportDialog(
     private val sendReport: suspend (model: String, report: String) -> Boolean,
     private val showLegacyLog: () -> Unit,
 ) {
-    private val thaiModels = ThaiZontesModel.entries.flatMap { model ->
-        when (model) {
-            ThaiZontesModel.Z368E -> listOf(model.label, "Zontes 368E ETC")
-            ThaiZontesModel.Z368G -> listOf(model.label, "Zontes 368G 2026")
-            else -> listOf(model.label)
-        }
-    }
-    private val modelChoices = listOf(activity.getString(R.string.tft_issue_model_select)) + thaiModels +
-        activity.getString(R.string.tft_issue_model_other)
-
-    private data class Draft(
-        val modelChoice: Int = 0,
-        val otherModel: String = "",
-        val symptom: String = "",
-        val displayResult: Int = 0,
+    private val textAdapter = AndroidConnectionIssueTextAdapter(activity)
+    private val modelChoices = ConnectionIssueReport.modelChoices(textAdapter)
+    private val otherModelIndex = ConnectionIssueReport.otherModelChoiceIndex(textAdapter)
+    private val reportContext = ConnectionIssueContext(
+        appVersion = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+        deviceInfo = "${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}",
+        phaseLabel = activity.getString(phase.labelRes),
+        headunitStatus = headunit.name,
     )
 
-    fun show() = showForm(Draft())
-
-    private fun showForm(draft: Draft) {
-        val otherModel = input(R.string.tft_issue_model_hint, draft.otherModel, 40, multiline = false).apply {
-            visibility = if (draft.modelChoice == modelChoices.lastIndex) View.VISIBLE else View.GONE
-        }
-        val modelPicker = Spinner(activity, Spinner.MODE_DROPDOWN).apply {
-            minimumHeight = (48 * resources.displayMetrics.density).toInt()
-            adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_item, modelChoices).apply {
-                setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-            }
-            setSelection(draft.modelChoice)
-            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                    otherModel.visibility = if (position == modelChoices.lastIndex) View.VISIBLE else View.GONE
-                }
-
-                override fun onNothingSelected(parent: AdapterView<*>?) {
-                    otherModel.visibility = View.GONE
-                }
-            }
-        }
-        val symptom = input(R.string.tft_issue_symptom_hint, draft.symptom, 200, multiline = true)
-        val displayChoices = listOf(R.string.tft_issue_display_unknown, R.string.tft_issue_display_yes, R.string.tft_issue_display_no)
-        val displayGroup = RadioGroup(activity)
-        val choiceIds = displayChoices.map { label ->
-            RadioButton(activity).apply {
-                id = View.generateViewId()
-                setText(label)
-                displayGroup.addView(this)
-            }.id
-        }
-        displayGroup.check(choiceIds[draft.displayResult])
-        val content = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            val padding = (20 * resources.displayMetrics.density).toInt()
-            setPaddingRelative(padding, padding / 2, padding, padding / 2)
-            addView(TextView(activity).apply { setText(R.string.tft_issue_intro) })
-            addView(modelPicker)
-            addView(otherModel)
-            addView(symptom)
-            addView(TextView(activity).apply { setText(R.string.tft_issue_display_question) })
-            addView(displayGroup)
-        }
-        AlertDialog.Builder(activity)
-            .setTitle(R.string.tft_issue_title)
-            .setView(ScrollView(activity).apply { addView(content) })
-            .setNegativeButton(R.string.close, null)
-            .setNeutralButton(R.string.tft_issue_legacy_log) { _, _ -> showLegacyLog() }
-            .setPositiveButton(R.string.tft_issue_preview) { _, _ ->
-                showPreview(Draft(
-                    modelPicker.selectedItemPosition.coerceAtLeast(0),
-                    otherModel.text.toString().trim(),
-                    symptom.text.toString().trim(),
-                    choiceIds.indexOf(displayGroup.checkedRadioButtonId).coerceAtLeast(0),
-                ), displayChoices)
-            }
-            .show()
-    }
-
-    private fun showPreview(draft: Draft, displayChoices: List<Int>) {
-        val unknown = activity.getString(R.string.tft_issue_unknown)
-        val model = when (draft.modelChoice) {
-            0 -> unknown
-            modelChoices.lastIndex -> draft.otherModel.ifBlank { unknown }
-            else -> modelChoices[draft.modelChoice]
-        }
-        val lastStage = activity.getString(when (evidence.lastStage) {
-            ConnectionStartupStage.HEADUNIT_READY -> R.string.tft_issue_stage_headunit
-            ConnectionStartupStage.WIFI_REQUESTED -> R.string.tft_issue_stage_wifi_requested
-            ConnectionStartupStage.WIFI_AVAILABLE -> R.string.tft_issue_stage_wifi_available
-            ConnectionStartupStage.PXC_STARTED -> R.string.tft_issue_stage_display
-            ConnectionStartupStage.FIRST_FRAME -> R.string.tft_issue_stage_first_frame
-            ConnectionStartupStage.REPEAT_REQUEST, null -> if (evidence.attemptStarted) R.string.tft_issue_stage_requested
-                else R.string.tft_issue_unknown
-        })
-        val step = evidence.elapsedMs?.let { activity.getString(R.string.tft_issue_stage_time, lastStage, it) } ?: lastStage
-        val modelLabel = activity.getString(R.string.tft_issue_report_model)
-        val symptom = activity.getString(R.string.tft_issue_report_symptom, draft.symptom.ifBlank { unknown })
-        val display = activity.getString(R.string.tft_issue_report_display, activity.getString(displayChoices[draft.displayResult]))
-        val timelineLabel = activity.getString(R.string.tft_issue_timeline)
-        val startedAt = if (evidence.attemptStarted) {
-            val time = evidence.startedAt?.format(DateTimeFormatter.ofPattern("dd/MM/uuuu HH:mm:ss XXX", Locale.ROOT)) ?: unknown
-            activity.getString(R.string.tft_issue_timeline_started, time)
-        } else null
-        val timeline = evidence.timeline.map { event ->
-            val stage = activity.getString(when (event.stage) {
-                ConnectionIssueTimelineStage.REQUESTED -> R.string.tft_issue_stage_requested
-                ConnectionIssueTimelineStage.HEADUNIT_READY -> R.string.tft_issue_stage_headunit
-                ConnectionIssueTimelineStage.WIFI_REQUESTED -> R.string.tft_issue_stage_wifi_requested
-                ConnectionIssueTimelineStage.WIFI_AVAILABLE -> R.string.tft_issue_stage_wifi_available
-                ConnectionIssueTimelineStage.PXC_STARTED -> R.string.tft_issue_stage_display
-                ConnectionIssueTimelineStage.FIRST_FRAME -> R.string.tft_issue_stage_first_frame
-            })
-            activity.getString(R.string.tft_issue_stage_time, stage, event.elapsedMs)
-        }.ifEmpty { listOf(activity.getString(R.string.tft_issue_timeline_empty)) }
-        val details = activity.getString(R.string.tft_issue_report_details,
-            "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-            "${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}",
-            activity.getString(phase.labelRes), headunit.name, step,
-            evidence.qrModel ?: unknown, evidence.displayModel ?: unknown, evidence.displayFirmware ?: unknown,
-        )
-        val diagnosticsTitle = activity.getString(R.string.tft_issue_diagnostics_title)
-        val diagnostics = evidence.structuredSummary()
-        val report = listOf(
-            activity.getString(R.string.tft_issue_report_title),
-            "$modelLabel: $model\n$symptom\n$display",
-            "$timelineLabel\n${(listOfNotNull(startedAt) + timeline).joinToString("\n")}",
-            details,
-            "$diagnosticsTitle\n$diagnostics",
-        ).joinToString("\n\n")
-
+    fun show() {
         val density = activity.resources.displayMetrics.density
         fun dp(value: Int) = (value * density + 0.5f).toInt()
         fun rounded(color: Int, radius: Int, border: Int? = null) = GradientDrawable().apply {
@@ -173,180 +58,318 @@ internal class ConnectionIssueReportDialog(
             cornerRadius = dp(radius).toFloat()
             border?.let { setStroke(dp(1), it) }
         }
-        val white = Color.rgb(239, 245, 255)
-        val muted = Color.rgb(174, 193, 216)
-        val cyan = Color.rgb(103, 205, 255)
-        fun text(value: String, size: Float, color: Int = white, bold: Boolean = false) = TextView(activity).apply {
-            this.text = value
-            textSize = size
-            setTextColor(color)
-            if (bold) setTypeface(typeface, Typeface.BOLD)
-        }
-        fun LinearLayout.addSpaced(view: View, top: Int = 0, width: Int = ViewGroup.LayoutParams.MATCH_PARENT) {
-            addView(view, LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(top)
-            })
-        }
-        fun card() = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(16))
-            background = rounded(Color.rgb(17, 33, 55), 18, Color.rgb(53, 76, 105))
-        }
-        val content = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(20), dp(20), dp(20))
-        }
-        content.addSpaced(text(activity.getString(R.string.app_name), 15f, muted, bold = true))
-        content.addSpaced(text(activity.getString(R.string.tft_issue_preview), 24f, bold = true), 20)
-        content.addSpaced(text(activity.getString(R.string.tft_issue_preview_note), 14f, muted), 6)
 
-        val summary = card()
-        summary.addSpaced(text(modelLabel, 13f, muted))
-        summary.addSpaced(text(model, 21f, bold = true), 3)
-        summary.addSpaced(text(display, 14f, white, bold = true).apply {
-            setPadding(dp(12), dp(7), dp(12), dp(7))
-            background = rounded(Color.rgb(31, 58, 83), 16)
-        }, 10, ViewGroup.LayoutParams.WRAP_CONTENT)
-        summary.addSpaced(text(symptom, 15f), 14)
-        summary.addSpaced(View(activity).apply { setBackgroundColor(Color.rgb(53, 76, 105)) }, 14)
-        summary.getChildAt(summary.childCount - 1).layoutParams.height = dp(1)
-        summary.addSpaced(text(timelineLabel, 15f, bold = true), 14)
-        if (startedAt != null) summary.addSpaced(text(startedAt, 13f, muted), 6)
-        timeline.takeLast(3).forEach { event ->
-            val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-            row.addView(text("•", 16f, cyan), LinearLayout.LayoutParams(dp(18), ViewGroup.LayoutParams.WRAP_CONTENT))
-            row.addView(text(event, 14f), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            summary.addSpaced(row, 8)
-        }
-        if (timeline.size > 3) {
-            summary.addSpaced(text(activity.getString(R.string.tft_issue_timeline_short, 3, timeline.size), 13f, muted), 8)
-        }
-        content.addSpaced(summary, 18)
-        val detailCard = card()
-        detailCard.addSpaced(text(activity.getString(R.string.tft_issue_details), 15f, bold = true))
-        detailCard.addSpaced(text(details, 14f, muted).apply { setTextIsSelectable(true) }, 8)
-        detailCard.addSpaced(text(timelineLabel, 15f, bold = true), 16)
-        if (startedAt != null) detailCard.addSpaced(text(startedAt, 13f, muted), 6)
-        timeline.forEach { detailCard.addSpaced(text(it, 14f, muted), 6) }
-        val diagnosticsCard = card()
-        diagnosticsCard.addSpaced(text(diagnosticsTitle, 15f, bold = true))
-        diagnosticsCard.addSpaced(text(activity.getString(R.string.tft_issue_diagnostics_note), 13f, muted), 8)
-        diagnosticsCard.addSpaced(text(diagnostics, 13f).apply {
-            typeface = Typeface.MONOSPACE
-            setTextIsSelectable(true)
-        }, 10)
-        val fullDetails = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
+        val mutedColor = Color.rgb(174, 193, 216)
+        val cyanColor = Color.rgb(103, 205, 255)
+        val previewTextColor = Color.rgb(239, 245, 255)
+        val successColor = Color.rgb(89, 220, 170)
+        val errorColor = Color.rgb(255, 176, 164)
+
+        val otherModel = input(R.string.tft_issue_model_hint, maxLength = 40, multiline = false).apply {
             visibility = View.GONE
-            addSpaced(detailCard)
-            addSpaced(diagnosticsCard, 12)
         }
-        val detailsButton = Button(activity).apply {
-            setText(R.string.tft_issue_details_show)
-            isAllCaps = false
-            setTextColor(cyan)
-            minHeight = dp(48)
-            background = rounded(Color.rgb(17, 33, 55), 14, Color.rgb(53, 76, 105))
-            setOnClickListener {
-                val expanding = fullDetails.visibility != View.VISIBLE
-                fullDetails.visibility = if (expanding) View.VISIBLE else View.GONE
-                setText(if (expanding) R.string.tft_issue_details_hide else R.string.tft_issue_details_show)
+        val modelPicker = Spinner(activity, Spinner.MODE_DROPDOWN).apply {
+            minimumHeight = dp(48)
+            adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_item, modelChoices).apply {
+                setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
             }
+            setSelection(0)
         }
-        content.addSpaced(detailsButton, 12)
-        content.addSpaced(fullDetails, 8)
+        val symptom = input(R.string.tft_issue_symptom_hint, maxLength = 200, multiline = true)
+        val displayChoices = listOf(
+            ConnectionIssueDisplayResult.UNKNOWN to R.string.tft_issue_display_unknown,
+            ConnectionIssueDisplayResult.YES to R.string.tft_issue_display_yes,
+            ConnectionIssueDisplayResult.NO to R.string.tft_issue_display_no,
+        )
+        val displayGroup = RadioGroup(activity)
+        val choiceIds = displayChoices.map { (result, labelRes) ->
+            result to RadioButton(activity).apply {
+                id = View.generateViewId()
+                setText(labelRes)
+                displayGroup.addView(this)
+            }.id
+        }
+        displayGroup.check(choiceIds.first().second)
 
-        val sendButton = Button(activity).apply {
-            setText(R.string.tft_issue_send)
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            textSize = 16f
-            minHeight = dp(52)
-            background = rounded(Color.rgb(22, 105, 183), 14)
+        val previewText = TextView(activity).apply {
+            textSize = 12.5f
+            typeface = Typeface.MONOSPACE
+            setTextColor(previewTextColor)
+            setTextIsSelectable(true)
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            background = rounded(Color.rgb(17, 33, 55), 12, Color.rgb(53, 76, 105))
+            visibility = View.GONE
         }
-        val status = text("", 14f, muted).apply {
+
+        val statusView = TextView(activity).apply {
+            textSize = 14f
+            setTextColor(mutedColor)
             visibility = View.GONE
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
-        val editButton = Button(activity).apply {
-            setText(R.string.tft_issue_edit)
+
+        var sending = false
+        var reportSent = false
+
+        fun currentDraft(): ConnectionIssueDraft {
+            val selectedDisplay = choiceIds.firstOrNull { it.second == displayGroup.checkedRadioButtonId }?.first
+                ?: ConnectionIssueDisplayResult.UNKNOWN
+            return ConnectionIssueDraft(
+                modelChoiceIndex = modelPicker.selectedItemPosition.coerceAtLeast(0),
+                otherModel = otherModel.text.toString(),
+                symptom = symptom.text.toString(),
+                displayResult = selectedDisplay,
+            )
+        }
+
+        fun buildCurrentReport(): ConnectionIssueBuildResult =
+            ConnectionIssueReport.build(currentDraft(), evidence, reportContext, textAdapter)
+
+        fun refreshPreviewIfVisible() {
+            if (previewText.visibility == View.VISIBLE) {
+                previewText.text = buildCurrentReport().payload.report
+            }
+        }
+
+        fun clearValidationFeedback() {
+            otherModel.error = null
+            symptom.error = null
+            if (!sending && !reportSent) {
+                statusView.visibility = View.GONE
+            }
+        }
+
+        val toggleDetailsButton = Button(activity).apply {
+            setText(R.string.tft_issue_details_show)
             isAllCaps = false
-            setTextColor(cyan)
+            setTextColor(cyanColor)
             minHeight = dp(48)
-            background = ColorDrawable(Color.TRANSPARENT)
+            background = rounded(Color.rgb(17, 33, 55), 12, Color.rgb(53, 76, 105))
+            setOnClickListener {
+                val expanding = previewText.visibility != View.VISIBLE
+                if (expanding) {
+                    previewText.text = buildCurrentReport().payload.report
+                }
+                previewText.visibility = if (expanding) View.VISIBLE else View.GONE
+                setText(if (expanding) R.string.tft_issue_details_hide else R.string.tft_issue_details_show)
+            }
         }
-        val footer = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(4), dp(20), dp(12))
-            addSpaced(sendButton)
-            addSpaced(status, 8)
-            addSpaced(editButton, 4)
+
+        modelPicker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                otherModel.visibility = if (position == otherModelIndex) View.VISIBLE else View.GONE
+                clearValidationFeedback()
+                refreshPreviewIfVisible()
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {
+                otherModel.visibility = View.GONE
+            }
         }
-        val panel = LinearLayout(activity).apply {
+        otherModel.doAfterTextChanged {
+            clearValidationFeedback()
+            refreshPreviewIfVisible()
+        }
+        symptom.doAfterTextChanged {
+            clearValidationFeedback()
+            refreshPreviewIfVisible()
+        }
+        displayGroup.setOnCheckedChangeListener { _, _ ->
+            clearValidationFeedback()
+            refreshPreviewIfVisible()
+        }
+
+        fun LinearLayout.addSpaced(view: View, topDp: Int = 0) {
+            addView(
+                view,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = dp(topDp)
+                },
+            )
+        }
+
+        val content = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            background = rounded(Color.rgb(7, 16, 33), 22)
-            addView(ScrollView(activity).apply { addView(content) },
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-            addSpaced(footer)
+            val padding = dp(20)
+            setPaddingRelative(padding, padding / 2, padding, padding / 2)
+            addSpaced(TextView(activity).apply { setText(R.string.tft_issue_intro) })
+            addSpaced(modelPicker, topDp = 8)
+            addSpaced(otherModel, topDp = 4)
+            addSpaced(symptom, topDp = 4)
+            addSpaced(TextView(activity).apply { setText(R.string.tft_issue_display_question) }, topDp = 8)
+            addSpaced(displayGroup, topDp = 4)
+            addSpaced(toggleDetailsButton, topDp = 12)
+            addSpaced(previewText, topDp = 8)
+            addSpaced(statusView, topDp = 10)
+        }
+
+        fun setInputsEnabled(enabled: Boolean) {
+            modelPicker.isEnabled = enabled
+            otherModel.isEnabled = enabled
+            symptom.isEnabled = enabled
+            for (i in 0 until displayGroup.childCount) {
+                displayGroup.getChildAt(i).isEnabled = enabled
+            }
         }
 
         val dialog = AlertDialog.Builder(activity)
-            .setView(panel)
+            .setTitle(R.string.tft_issue_title)
+            .setView(ScrollView(activity).apply { addView(content) })
+            .setNegativeButton(R.string.close, null)
+            .setNeutralButton(R.string.tft_issue_legacy_log) { _, _ -> showLegacyLog() }
+            .setPositiveButton(R.string.tft_issue_send, null)
             .create()
-        var reportSent = false
         dialog.setCanceledOnTouchOutside(false)
-        editButton.setOnClickListener {
-            dialog.dismiss()
-            if (!reportSent) showForm(draft)
-        }
-        sendButton.setOnClickListener {
-            sendButton.isEnabled = false
-            sendButton.alpha = 0.6f
-            editButton.isEnabled = false
-            dialog.setCancelable(false)
-            status.visibility = View.VISIBLE
-            status.setTextColor(muted)
-            status.setText(R.string.tft_issue_sending)
-            activity.lifecycleScope.launch {
-                val sent = try {
-                    sendReport(model, report)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    false
+
+        dialog.setOnShowListener {
+            val sendButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            val closeButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
+            val legacyButton = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+            sendButton.setOnClickListener {
+                if (sending || reportSent) return@setOnClickListener
+                val result = buildCurrentReport()
+                if (previewText.visibility == View.VISIBLE) {
+                    previewText.text = result.payload.report
                 }
-                if (!dialog.isShowing) return@launch
-                dialog.setCancelable(true)
-                editButton.isEnabled = true
-                if (sent) {
-                    reportSent = true
-                    editButton.setText(R.string.close)
-                    status.setTextColor(Color.rgb(89, 220, 170))
-                    status.setText(R.string.tft_issue_send_success)
-                } else {
-                    sendButton.isEnabled = true
-                    sendButton.alpha = 1f
-                    status.setTextColor(Color.rgb(255, 176, 164))
-                    status.setText(R.string.tft_issue_send_error)
+                when (result) {
+                    is ConnectionIssueBuildResult.Invalid -> {
+                        val message = when (result.error) {
+                            ConnectionIssueValidationError.OTHER_MODEL_REQUIRED -> {
+                                val text = activity.getString(R.string.tft_issue_error_other_model)
+                                otherModel.visibility = View.VISIBLE
+                                otherModel.error = text
+                                otherModel.requestFocus()
+                                text
+                            }
+                            ConnectionIssueValidationError.DETAILS_REQUIRED -> {
+                                val text = activity.getString(R.string.tft_issue_error_details_required)
+                                symptom.error = text
+                                symptom.requestFocus()
+                                text
+                            }
+                        }
+                        statusView.visibility = View.VISIBLE
+                        statusView.setTextColor(errorColor)
+                        statusView.text = message
+                    }
+                    is ConnectionIssueBuildResult.Ready -> {
+                        sending = true
+                        setInputsEnabled(false)
+                        sendButton.isEnabled = false
+                        sendButton.alpha = 0.6f
+                        closeButton.isEnabled = false
+                        legacyButton.isEnabled = false
+                        dialog.setCancelable(false)
+                        statusView.visibility = View.VISIBLE
+                        statusView.setTextColor(mutedColor)
+                        statusView.setText(R.string.tft_issue_sending)
+                        activity.lifecycleScope.launch {
+                            val sent = try {
+                                sendReport(result.payload.model, result.payload.report)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                false
+                            }
+                            if (!dialog.isShowing || activity.isFinishing || activity.isDestroyed) return@launch
+                            dialog.setCancelable(true)
+                            closeButton.isEnabled = true
+                            legacyButton.isEnabled = true
+                            if (sent) {
+                                sending = false
+                                reportSent = true
+                                statusView.setTextColor(successColor)
+                                statusView.setText(R.string.tft_issue_send_success)
+                            } else {
+                                sending = false
+                                setInputsEnabled(true)
+                                sendButton.isEnabled = true
+                                sendButton.alpha = 1f
+                                statusView.setTextColor(errorColor)
+                                statusView.setText(R.string.tft_issue_send_error)
+                            }
+                        }
+                    }
                 }
             }
         }
         dialog.show()
-        dialog.window?.apply {
-            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            setLayout((activity.resources.displayMetrics.widthPixels - dp(32)).coerceAtMost(dp(520)), ViewGroup.LayoutParams.WRAP_CONTENT)
-            setGravity(Gravity.CENTER)
-        }
     }
 
-    private fun input(@StringRes hintRes: Int, value: String, maxLength: Int, multiline: Boolean) = EditText(activity).apply {
+    private fun input(@StringRes hintRes: Int, maxLength: Int, multiline: Boolean) = EditText(activity).apply {
         setHint(hintRes)
         filters = arrayOf(InputFilter.LengthFilter(maxLength))
         if (multiline) {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             setMinLines(2)
             maxLines = 4
-        } else setSingleLine()
-        setText(value)
+        } else {
+            setSingleLine()
+        }
+    }
+
+    private class AndroidConnectionIssueTextAdapter(
+        private val activity: AppCompatActivity,
+    ) : ConnectionIssueTextAdapter {
+        override val unknown: String get() = activity.getString(R.string.tft_issue_unknown)
+        override val selectModelLabel: String get() = activity.getString(R.string.tft_issue_model_select)
+        override val otherModelLabel: String get() = activity.getString(R.string.tft_issue_model_other)
+        override val reportTitle: String get() = activity.getString(R.string.tft_issue_report_title)
+        override val reportModelLabel: String get() = activity.getString(R.string.tft_issue_report_model)
+        override val timelineTitle: String get() = activity.getString(R.string.tft_issue_timeline)
+        override val timelineEmpty: String get() = activity.getString(R.string.tft_issue_timeline_empty)
+        override val diagnosticsTitle: String get() = activity.getString(R.string.tft_issue_diagnostics_title)
+
+        override fun stageLabel(stage: ConnectionIssueTimelineStage): String = activity.getString(
+            when (stage) {
+                ConnectionIssueTimelineStage.REQUESTED -> R.string.tft_issue_stage_requested
+                ConnectionIssueTimelineStage.HEADUNIT_READY -> R.string.tft_issue_stage_headunit
+                ConnectionIssueTimelineStage.WIFI_REQUESTED -> R.string.tft_issue_stage_wifi_requested
+                ConnectionIssueTimelineStage.WIFI_AVAILABLE -> R.string.tft_issue_stage_wifi_available
+                ConnectionIssueTimelineStage.PXC_STARTED -> R.string.tft_issue_stage_display
+                ConnectionIssueTimelineStage.FIRST_FRAME -> R.string.tft_issue_stage_first_frame
+            },
+        )
+
+        override fun displayResultLabel(result: ConnectionIssueDisplayResult): String = activity.getString(
+            when (result) {
+                ConnectionIssueDisplayResult.UNKNOWN -> R.string.tft_issue_display_unknown
+                ConnectionIssueDisplayResult.YES -> R.string.tft_issue_display_yes
+                ConnectionIssueDisplayResult.NO -> R.string.tft_issue_display_no
+            },
+        )
+
+        override fun formatSymptomLine(symptom: String): String =
+            activity.getString(R.string.tft_issue_report_symptom, symptom)
+
+        override fun formatDisplayLine(displayLabel: String): String =
+            activity.getString(R.string.tft_issue_report_display, displayLabel)
+
+        override fun formatTimelineStarted(formattedTime: String): String =
+            activity.getString(R.string.tft_issue_timeline_started, formattedTime)
+
+        override fun formatStageTime(stageLabel: String, elapsedMs: Long): String =
+            activity.getString(R.string.tft_issue_stage_time, stageLabel, elapsedMs)
+
+        override fun formatReportDetails(
+            appVersion: String,
+            deviceInfo: String,
+            phaseLabel: String,
+            headunitStatus: String,
+            lastStep: String,
+            qrModel: String,
+            displayModel: String,
+            displayFirmware: String,
+        ): String = activity.getString(
+            R.string.tft_issue_report_details,
+            appVersion,
+            deviceInfo,
+            phaseLabel,
+            headunitStatus,
+            lastStep,
+            qrModel,
+            displayModel,
+            displayFirmware,
+        )
     }
 }

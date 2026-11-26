@@ -33,9 +33,6 @@
     <string name="tft_issue_display_unknown">Did not check</string>
     <string name="tft_issue_display_yes">Yes, I saw it</string>
     <string name="tft_issue_display_no">No, I did not see it</string>
-    <string name="tft_issue_preview">Review report</string>
-    <string name="tft_issue_preview_note">Review the details and log below before sending them to Google Forms.</string>
-    <string name="tft_issue_edit">Go back and edit</string>
     <string name="tft_issue_send">Send report</string>
     <string name="tft_issue_sending">Sending report…</string>
     <string name="tft_issue_send_success">Report sent successfully.</string>

@@ -216,7 +216,16 @@ class SessionService : Service() {
 
         if (action == ACTION_PREPARE_HEADUNIT) {
             standbyStoppedInBackground = false
-            if (!isRunning) startSession(projectionRequested = false)
+            if (isRunning) {
+                receiver?.requestHeadunitCheck()
+                val detail = ConnectionState.detail
+                if (!AaVideoBridge.aaSessionLive &&
+                    (detail.isResource(R.string.headunit_refused) || detail.isResource(R.string.headunit_wedged))) {
+                    ConnectionState.set(ConnectionState.phase, R.string.headunit_header_checking)
+                }
+            } else {
+                startSession(projectionRequested = false)
+            }
             updateStandbyTimeout()
             return START_NOT_STICKY
         }
@@ -321,7 +330,7 @@ class SessionService : Service() {
                 TftDiagnostics.beginConnectionStartup(requestedAtMs)
                 isProjectionRequested = true
                 checkNotNull(standbyReceiver).allowSelfModeRecovery = true
-                if (!AaVideoBridge.headunitSessionLive) standbyReceiver.wakeCoordinator()
+                if (!AaVideoBridge.headunitSessionLive) standbyReceiver.requestHeadunitCheck()
                 acquireLocks()
                 publishProjectionStarting(bikeName, config.profile.panelSize ?: (config.video.width to config.video.height))
                 if (AaVideoBridge.headunitSessionLive) {
@@ -403,7 +412,7 @@ class SessionService : Service() {
                             // settle window and keeps :5288 open — no manual Stop → Connect needed.
                             LogBus.log("[Session] AA ตัดการเชื่อมต่อชั่วคราว — กำลังต่อ :5277 / :5288 ใหม่อัตโนมัติ")
                             mainHandler.post {
-                                if (gen == sessionGeneration && isRunning) {
+                                if (gen == sessionGeneration && isRunning && !AaVideoBridge.aaSessionLive) {
                                     val phase = if (isProjectionRequested) Phase.STARTING_AA else Phase.IDLE
                                     ConnectionState.set(phase, R.string.aa_auto_retry)
                                 }
@@ -412,7 +421,8 @@ class SessionService : Service() {
                     }
                     onHeadunitGuidance = { reasonRes ->
                         mainHandler.post {
-                            if (gen == sessionGeneration && isRunning && !AaVideoBridge.aaSessionLive) {
+                            if (gen == sessionGeneration && isRunning && !AaVideoBridge.aaSessionLive &&
+                                ProjectionHarness.headunitGuidance(AaVideoBridge.headunitStatus) == reasonRes) {
                                 val phase = if (isProjectionRequested) Phase.STARTING_AA else Phase.IDLE
                                 ConnectionState.set(phase, reasonRes)
                             }

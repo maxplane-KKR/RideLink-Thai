@@ -11,10 +11,10 @@
 
 <p align="center">
   <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/latest">
-    <img src="https://img.shields.io/badge/Latest%20Release-v0.2.13-00C853?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" />
+    <img src="https://img.shields.io/badge/Latest%20Release-v0.2.14-00C853?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" />
   </a>
-  <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.13/RideLink-Thai-v0.2.13.apk">
-    <img src="https://img.shields.io/badge/Download-APK%20(v0.2.13)-2962FF?style=for-the-badge&logo=android&logoColor=white" alt="Download APK" />
+  <a href="https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.14/RideLink-Thai-v0.2.14.apk">
+    <img src="https://img.shields.io/badge/Download-APK%20(v0.2.14)-2962FF?style=for-the-badge&logo=android&logoColor=white" alt="Download APK" />
   </a>
 </p>
 
@@ -36,18 +36,19 @@
 
 Download the pre-compiled Android package (`.apk`) directly to your phone:
 
-* 📱 **[Download RideLink-Thai-v0.2.13.apk](https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.13/RideLink-Thai-v0.2.13.apk)** — Android 10 or later
+* 📱 **[Download RideLink-Thai-v0.2.14.apk](https://github.com/maxplane-KKR/RideLink-Thai/releases/download/v0.2.14/RideLink-Thai-v0.2.14.apk)** — Android 10 or later
 * 📦 **[All Release Versions on GitHub Releases](https://github.com/maxplane-KKR/RideLink-Thai/releases)**
 * 🌐 **[Interactive Preview & Recommended OBD2 Adapters](https://ridelink-th.pages.dev/en/)**
 
-### What's New in `v0.2.13` (`versionCode 15`)
-* **More reliable repeat connections**: Added a dedicated Wi-Fi join state machine (`BikeWifiJoinMachine`) with observed-BSSID fast-path + automatic SSID fallback and DHCP readiness gating, plus a PXC dial-back & stream-stall supervisor (`PxcLinkSupervisor`) and clean QR re-scan reconnect handling.
-* **Built-in 24-hour clock on all 14 live dashboards**: Every live dashboard theme (Day and Night modes) now displays a real-time `HH:mm` clock positioned safely above the bike's bottom status strip without overlapping speed, RPM, or OBD cards.
-* **Cleaner connection diagnostics**: Reduced standby `:5277` log noise and added a dedicated recent bike-connection trace window with SSID/PSK/MAC redaction in the in-app support report.
+### What's New in `v0.2.14` (`versionCode 16`)
 
-SHA-256: `60bd3997a025564b4a7f34eae4fe722bb7e6c292c4aed2461ea6b81533dc90ad`
+* **Automatic Head Unit check.** Open RideLink and wait for the Android Auto handshake. The status distinguishes a reachable server from a verified connection and offers help on tap.
+* **OBD2 connection recovery.** The app waits until the first frame is sent to the motorcycle, keeps the Bluetooth link open while waiting for the ECU, and retries the adapter sooner if its link drops. On-bike validation of this build is pending.
+* **Send reports in one step.** Submit the report from the form or expand its details first. Reports can include a summary of the previous attempt and selected OBD2 events.
 
-**Updating:** Users on `0.2.11` or `0.2.12` can install `0.2.13` directly over the existing app (same signing key). Users on `0.2.9` must uninstall the old version first because it used a different signing key (uninstalling may remove app data and settings, so note anything you want to keep first).
+SHA-256: `bf777b4b99439638a6c136f00bc9cc45a941f114e829e90b16a0729e87ac8add`
+
+**Updating.** Users on `0.2.11` through `0.2.13` can install `0.2.14` directly over the existing app with the same signing key. Users on `0.2.9` must uninstall the old version first because it used a different signing key. Uninstalling may remove app data and settings.
 
 ---
 
@@ -101,13 +102,13 @@ Instead of basic screen-casting that mirrors your phone's lockscreen or forces p
 1. Open **RideLink TH** and tap **Open Android Auto** (or open **Settings → Android Auto** on your phone).
 2. Scroll to the bottom and tap **Version** repeatedly (10 times) to unlock Developer Mode.
 3. Tap the **⋮** menu (top-right corner) and select **Start head unit server**, then return to RideLink TH.
-4. Wait until the top status banner confirms **Head Unit · Running · Ready for bike**.
+4. RideLink checks automatically. When the banner says **Head Unit · Running · Ready for bike**, you can connect to the motorcycle. Tap the banner for help if Android Auto does not respond.
 
 ### Step 2: Connect to Your Motorcycle
 1. Turn on the motorcycle ignition and open the **Screen Mirroring / Carbit / QR Code** menu on the TFT display.
 2. In **RideLink TH**, tap **Scan Bike QR** the first time (or re-scan anytime to refresh the bike link).
 3. Tap **Start Connection** on the Dashboard and approve the system Wi-Fi prompt if Android shows one.
-4. Optional: Open **TFT Display → Live Dashboard** to switch to one of the 14 live themes with the built-in clock and OBD2 gauges, or browse **Settings → Recommended OBD2** for tested adapters.
+4. Open **TFT Display → Live Dashboard** to try one of the 14 live themes with the built-in clock and OBD2 gauges. You can also browse **Settings → Recommended OBD2** for adapter options.
 
 ---
 

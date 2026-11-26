@@ -54,4 +54,8 @@
     <string name="pref_mirror_orient_follow">ตามการหมุนมือถือ (Auto Rotate)</string>
     <string name="pref_mirror_orient_land">แนวนอน (Landscape)</string>
     <string name="pref_mirror_orient_port">แนวตั้ง (Portrait)</string>
+
+    <!-- ตรวจสอบฟอร์มรายงานปัญหา 1 ขั้นตอน -->
+    <string name="tft_issue_error_other_model">กรุณาระบุชื่อรุ่นรถเมื่อเลือก «รุ่นอื่น»</string>
+    <string name="tft_issue_error_details_required">กรุณาระบุอาการหรือเลือกรุ่นรถก่อนส่งรายงาน</string>
 </resources>

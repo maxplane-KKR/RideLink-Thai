@@ -32,6 +32,7 @@ import android.widget.RelativeLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
@@ -186,13 +187,15 @@ class MainActivity : AppCompatActivity() {
     private var activeTabIndex = 0
     private var isPreviewVisible = false
     private var suppressSettingsCallbacks = false
+    // Controls can be enabled by a successful check or by the rider continuing from help.
     private var headunitSetupComplete = false
     private var headunitSettingsVisited = false
     private var initialPermissionsRequested = false
     private var headunitUiResumed = false
     private var voiceAfterPermission = false
     private var initialHeadunitCheckRequested = false
-    private var headunitSetupDialog: AlertDialog? = null
+    private var recheckHeadunitAfterSettings = false
+    private var headunitHelpDialog: AlertDialog? = null
 
     private val runtimePermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -231,6 +234,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         headunitSetupComplete = savedInstanceState?.getBoolean("headunit_setup_complete") == true
         headunitSettingsVisited = savedInstanceState?.getBoolean("headunit_settings_visited") == true
+        recheckHeadunitAfterSettings = savedInstanceState?.getBoolean("recheck_headunit_after_settings") == true
         initialPermissionsRequested = savedInstanceState?.getBoolean("initial_permissions_requested") == true
         ScreenMargins.load(this)
         TouchPrefs.init(this)
@@ -257,6 +261,7 @@ class MainActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("headunit_setup_complete", headunitSetupComplete)
         outState.putBoolean("headunit_settings_visited", headunitSettingsVisited)
+        outState.putBoolean("recheck_headunit_after_settings", recheckHeadunitAfterSettings)
         outState.putBoolean("initial_permissions_requested", initialPermissionsRequested)
         outState.putInt("active_tab", activeTabIndex)
         outState.putBoolean("tft_studio_open", tftStudioContainer.visibility == View.VISIBLE)
@@ -357,8 +362,9 @@ class MainActivity : AppCompatActivity() {
             sendAaAssistant()
         }
         val restartStandby = SessionService.consumeStandbyRestart()
-        if (!initialHeadunitCheckRequested || restartStandby) {
+        if (!initialHeadunitCheckRequested || restartStandby || recheckHeadunitAfterSettings) {
             initialHeadunitCheckRequested = true
+            recheckHeadunitAfterSettings = false
             requestHeadunitCheck()
         }
         if (headunitSetupComplete) activateProjectionControls()
@@ -378,7 +384,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        headunitSetupDialog?.dismiss()
+        headunitHelpDialog?.dismiss()
         AaVideoBridge.headunitStatusListener = null
         AaVideoBridge.fpsListener = null
         dashPreviewSurface?.let {
@@ -419,42 +425,44 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestHeadunitCheck() {
-        if (SessionService.isRunning) return
+        if (AaVideoBridge.aaSessionLive) return
         val intent = Intent(this, SessionService::class.java).setAction(SessionService.ACTION_PREPARE_HEADUNIT)
         ContextCompat.startForegroundService(this, intent)
     }
 
-    private fun showRequiredHeadunitSetup() {
-        if (headunitSetupDialog?.isShowing == true || isFinishing || isDestroyed) return
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(R.string.headunit_setup_required_title)
-            .setMessage(R.string.headunit_setup_required_message)
-            .setCancelable(false)
-            .setPositiveButton(R.string.headunit_open_settings, null)
-            .setNegativeButton(R.string.headunit_setup_continue, null)
-            .create()
-        headunitSetupDialog = dialog
-        dialog.setOnDismissListener {
-            if (headunitSetupDialog === dialog) headunitSetupDialog = null
-        }
-        dialog.setOnShowListener {
-            val continueButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
-            continueButton.isEnabled = headunitSettingsVisited
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                if (openAndroidAutoSettings()) {
-                    headunitSettingsVisited = true
-                    continueButton.isEnabled = true
-                } else {
+    private fun showHeadunitSetupHelp(@StringRes messageRes: Int) {
+        val handshakeFailed = messageRes == R.string.headunit_wedged
+        val builder = AlertDialog.Builder(this)
+            .setTitle(if (handshakeFailed) R.string.headunit_dialog_title else R.string.headunit_setup_required_title)
+            .setMessage(messageRes)
+            .setPositiveButton(R.string.headunit_open_settings) { _, _ ->
+                if (!openAndroidAutoSettings()) {
                     Toast.makeText(this, R.string.headunit_settings_unavailable, Toast.LENGTH_LONG).show()
                 }
             }
-            continueButton.setOnClickListener {
-                if (!headunitSettingsVisited) return@setOnClickListener
+        if (headunitSettingsVisited) {
+            builder.setNegativeButton(R.string.headunit_setup_continue) { _, _ ->
                 headunitSetupComplete = true
-                dialog.dismiss()
                 activateProjectionControls()
-                checkServerPort()
+                requestHeadunitCheck()
             }
+        } else {
+            builder.setNegativeButton(R.string.close, null)
+        }
+        if (handshakeFailed) {
+            builder.setNeutralButton(R.string.headunit_app_info) { _, _ -> openAndroidAutoAppInfo() }
+        } else {
+            builder.setNeutralButton(R.string.check_status) { _, _ -> requestHeadunitCheck() }
+        }
+        showHeadunitHelpDialog(builder)
+    }
+
+    private fun showHeadunitHelpDialog(builder: AlertDialog.Builder) {
+        if (headunitHelpDialog?.isShowing == true || isFinishing || isDestroyed) return
+        val dialog = builder.create()
+        headunitHelpDialog = dialog
+        dialog.setOnDismissListener {
+            if (headunitHelpDialog === dialog) headunitHelpDialog = null
         }
         dialog.show()
     }
@@ -463,7 +471,7 @@ class MainActivity : AppCompatActivity() {
     private fun startAutoProjection(toastMsg: String, forceBikeReconnect: Boolean = false) {
         val requestedAt = SystemClock.elapsedRealtime()
         if (!headunitSetupComplete) {
-            checkServerPort()
+            checkServerPort(fromUserClick = true)
             if (!headunitSetupComplete) return
         }
         updateTftStatusText()
@@ -1483,33 +1491,30 @@ class MainActivity : AppCompatActivity() {
     private fun checkServerPort(fromUserClick: Boolean = false) {
         val running = SessionService.isRunning
         val headunitLive = AaVideoBridge.headunitSessionLive
-        val detail = ConnectionState.detail
-        val needsSetup = ConnectionState.phase == Phase.ERROR ||
-            detail.isResource(R.string.headunit_refused) || detail.isResource(R.string.headunit_wedged)
-        if (!headunitSetupComplete && headunitUiResumed) {
-            when {
-                headunitLive -> {
-                    headunitSetupComplete = true
-                    headunitSetupDialog?.dismiss()
-                    activateProjectionControls()
-                }
-                needsSetup -> showRequiredHeadunitSetup()
+        val androidAutoLive = AaVideoBridge.aaSessionLive
+        val headunit = AaVideoBridge.headunitStatus
+        val guidance = ProjectionHarness.headunitGuidance(headunit)
+        val recoveryMessage = guidance.takeIf { running && !androidAutoLive }
+        if (headunitLive && headunitUiResumed) {
+            headunitHelpDialog?.dismiss()
+            if (!headunitSetupComplete) {
+                headunitSetupComplete = true
+                activateProjectionControls()
             }
         }
         val judgment = ProjectionHarness.evaluateServerStatusUi(
             sessionRunning = running,
-            handshakeLive = AaVideoBridge.aaSessionLive,
+            handshakeLive = androidAutoLive,
             decoding = AaVideoBridge.aaDecoding,
             fps = AaVideoBridge.currentFps,
-            headunit = AaVideoBridge.headunitStatus,
+            headunit = headunit,
         )
         val header = ProjectionHarness.evaluateHeadunitHeader(
             setupComplete = headunitSetupComplete,
             sessionRunning = running,
             headunitLive = headunitLive,
-            androidAutoLive = AaVideoBridge.aaSessionLive,
-            headunit = if (headunitSetupComplete || needsSetup) AaVideoBridge.headunitStatus
-                else ProjectionHarness.HeadunitLinkStatus.UNKNOWN,
+            androidAutoLive = androidAutoLive,
+            headunit = headunit,
             projectionRequested = SessionService.isProjectionRequested,
         )
         val status = if (SessionService.isProjectionRequested) judgment else header
@@ -1518,21 +1523,32 @@ class MainActivity : AppCompatActivity() {
         tvServerStatus.setTextColor(serverStatusColor(status.level))
         tvHeadunitHeaderStatus.setText(header.textRes)
         tvHeadunitHeaderStatus.setTextColor(serverStatusColor(header.level))
-        if (!fromUserClick || !headunitSetupComplete || headunitLive) return
-        val guidance = when (AaVideoBridge.headunitStatus) {
-            ProjectionHarness.HeadunitLinkStatus.REFUSED -> R.string.headunit_refused
-            ProjectionHarness.HeadunitLinkStatus.HANDSHAKE_FAILED -> R.string.headunit_wedged
-            else -> R.string.headunit_dialog_message
+        if (!fromUserClick || headunitLive) return
+        if (!headunitSetupComplete && !androidAutoLive) {
+            if (recoveryMessage == null) {
+                requestHeadunitCheck()
+            } else {
+                showHeadunitSetupHelp(
+                    if (headunit == ProjectionHarness.HeadunitLinkStatus.REFUSED) R.string.headunit_setup_required_message
+                    else recoveryMessage,
+                )
+            }
+            return
         }
         val dialog = AlertDialog.Builder(this)
             .setTitle(getString(R.string.headunit_dialog_title))
-            .setMessage(guidance)
+            .setMessage(recoveryMessage ?: R.string.headunit_dialog_message)
             .setPositiveButton(R.string.headunit_open_settings) { _, _ -> openAndroidAutoSettings() }
-            .setNegativeButton(R.string.close, null)
-        if (!running) {
-            dialog.setNeutralButton(R.string.check_status) { _, _ -> requestHeadunitCheck() }
+        if (running && !androidAutoLive && headunit == ProjectionHarness.HeadunitLinkStatus.HANDSHAKE_FAILED) {
+            dialog.setNeutralButton(R.string.headunit_app_info) { _, _ -> openAndroidAutoAppInfo() }
+            dialog.setNegativeButton(R.string.check_status) { _, _ -> requestHeadunitCheck() }
+        } else {
+            dialog.setNegativeButton(R.string.close, null)
+            if (!androidAutoLive) {
+                dialog.setNeutralButton(R.string.check_status) { _, _ -> requestHeadunitCheck() }
+            }
         }
-        dialog.show()
+        showHeadunitHelpDialog(dialog)
     }
 
     private fun serverStatusColor(level: ProjectionHarness.UiLevel): Int = ContextCompat.getColor(this, when (level) {
@@ -1550,15 +1566,11 @@ class MainActivity : AppCompatActivity() {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             startActivity(intent)
+            headunitSettingsVisited = true
+            recheckHeadunitAfterSettings = true
             return true
         } catch (_: Exception) {
-            try {
-                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.parse("package:com.google.android.projection.gearhead")
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                startActivity(intent)
-            } catch (_: Exception) {
+            if (!openAndroidAutoAppInfo()) {
                 val intent = Intent(Settings.ACTION_SETTINGS).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 }
@@ -1567,6 +1579,15 @@ class MainActivity : AppCompatActivity() {
         }
         return false
     }
+
+    private fun openAndroidAutoAppInfo(): Boolean = runCatching {
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:com.google.android.projection.gearhead"),
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
+        recheckHeadunitAfterSettings = true
+    }.isSuccess
 
     private fun initSettingsState() {
         suppressSettingsCallbacks = true
@@ -1820,11 +1841,20 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val phase = ConnectionState.phase
             val headunit = AaVideoBridge.headunitStatus
-            val evidence = try {
-                ConnectionIssueEvidence.fromHistory(TftDiagnostics.read())
+            val history = try {
+                TftDiagnostics.read()
             } catch (_: IOException) {
-                ConnectionIssueEvidence()
+                ""
             }
+            val trace = try {
+                TftDiagnostics.readTrace()
+            } catch (_: IOException) {
+                ""
+            }
+            val evidence = withContext(Dispatchers.Default) {
+                ConnectionIssueEvidence.fromHistory(history, trace)
+            }
+            if (isFinishing || isDestroyed) return@launch
             ConnectionIssueReportDialog(
                 this@MainActivity, evidence, phase, headunit, ConnectionIssueSubmission::send, ::showTftDiagnosticLog,
             ).show()

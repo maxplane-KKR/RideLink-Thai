@@ -179,6 +179,7 @@ internal class AapControlService(private val aapTransport: AapTransport) : AapCo
             }
             Control.ControlMsgType.MESSAGE_BYEBYE_RESPONSE_VALUE -> {
                 AaLog.i("Byebye Response received")
+                aapTransport.onByeByeResponse()
                 return -1
             }
             Control.ControlMsgType.MESSAGE_VOICE_SESSION_NOTIFICATION_VALUE -> {

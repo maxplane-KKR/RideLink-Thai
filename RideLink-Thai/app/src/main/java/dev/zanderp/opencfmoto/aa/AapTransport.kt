@@ -13,6 +13,8 @@ import android.os.Process
 import android.os.SystemClock
 import android.util.SparseIntArray
 import dev.zanderp.opencfmoto.aa.proto.Control
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class AapTransport(
     private val videoDecoder: VideoDecoder,
@@ -29,6 +31,8 @@ class AapTransport(
     private val startedSensors = HashSet<Int>(4)
     private var connection: AccessoryConnection? = null
     private var aapRead: AapRead? = null
+    private val workerLock = Any()
+    private val byeByeResponse = CountDownLatch(1)
 
     var ignoreNextStopRequest: Boolean = false
     /** Set when VIDEO_FOCUS_NATIVE triggers a stop (user tapped Exit on the phone). */
@@ -112,21 +116,27 @@ class AapTransport(
     /**
      * Graceful, bounded teardown — call from a background thread, never the main looper.
      * Sends ByeByeRequest through the send thread (keeps SSL state single-threaded), waits at most
-     * [BYEBYE_SEND_TIMEOUT_MS] for it to be written, flushes briefly, closes the connection FIRST
+     * [BYEBYE_SEND_TIMEOUT_MS] for it to be written, waits for the peer, then closes the socket
      * (so the poll thread wakes immediately instead of hitting the join timeout), then quits.
-     * @return true when ByeBye was actually written to the peer.
+     * @return true when the peer acknowledged ByeBye.
      */
     internal fun stopGracefully(): Boolean {
-        localShutdown = true
+        val stoppingConnection = synchronized(workerLock) {
+            localShutdown = true
+            connection
+        }
         AaLog.i("AapTransport graceful stop (handshakeComplete=$handshakeComplete)")
         val result = AapTeardown.close(
-            connection = connection,
+            connection = stoppingConnection,
             handshakeComplete = handshakeComplete,
             sendByeBye = { sendByeByeBlocking(BYEBYE_SEND_TIMEOUT_MS) },
+            awaitByeByeResponse = { byeByeResponse.await(it, TimeUnit.MILLISECONDS) },
         )
         quit(clean = true)
         return result.graceful
     }
+
+    internal fun onByeByeResponse() = byeByeResponse.countDown()
 
     private fun sendByeByeBlocking(timeoutMs: Long): Boolean {
         val handler = sendHandler ?: return false
@@ -151,7 +161,9 @@ class AapTransport(
     internal fun quit(clean: Boolean = false) {
         // Local stop closes the socket, which also makes the poll thread call quit(): only the
         // first caller runs the teardown.
-        if (!quitStarted.compareAndSet(false, true)) return
+        synchronized(workerLock) {
+            if (!quitStarted.compareAndSet(false, true)) return
+        }
         val cb = onQuit
         onQuit = null
         AaLog.i("AapTransport quitting (clean=$clean, local=$localShutdown)")
@@ -175,36 +187,45 @@ class AapTransport(
     }
 
     /** Phase 1: create send/poll threads and run the version + SSL handshake. */
-    internal fun startHandshake(connection: AccessoryConnection): Boolean {
+    internal fun startHandshake(connection: AccessoryConnection, viaHeadunit: Boolean): Boolean {
         AaLog.i("Start Aap transport handshake for $connection")
-        this.connection = connection
-        wasUserExit = false
+        synchronized(workerLock) {
+            if (localShutdown || quitStarted.get()) return false
+            this.connection = connection
+            wasUserExit = false
 
-        sendThread = HandlerThread("AapTransport:Handler::Send", Process.THREAD_PRIORITY_AUDIO)
-        sendThread!!.start()
-        sendHandler = Handler(sendThread!!.looper, sendHandlerCallback)
+            sendThread = HandlerThread("AapTransport:Handler::Send", Process.THREAD_PRIORITY_AUDIO)
+            sendThread!!.start()
+            sendHandler = Handler(sendThread!!.looper, sendHandlerCallback)
 
-        pollThread = HandlerThread("AapTransport:Handler::Poll", Process.THREAD_PRIORITY_AUDIO)
-        pollThread!!.start()
-        pollHandler = Handler(pollThread!!.looper, pollHandlerCallback)
+            pollThread = HandlerThread("AapTransport:Handler::Poll", Process.THREAD_PRIORITY_AUDIO)
+            pollThread!!.start()
+            pollHandler = Handler(pollThread!!.looper, pollHandlerCallback)
+        }
 
-        if (!handshake(connection)) {
+        if (!handshake(connection, viaHeadunit)) {
             quit()
             AaLog.e("Handshake failed")
             return false
         }
-        handshakeComplete = true
-        return true
+        return synchronized(workerLock) {
+            if (localShutdown || quitStarted.get()) return@synchronized false
+            handshakeComplete = true
+            true
+        }
     }
 
     /** Phase 2: begin the inbound message loop. Call after the decoder surface is set. */
     internal fun startReading() {
-        AaLog.i("Start Aap transport read loop")
-        aapRead = AapRead.Factory.create(connection!!, this, aapVideo)
-        pollHandler?.sendEmptyMessage(MSG_POLL)
+        synchronized(workerLock) {
+            if (localShutdown || quitStarted.get()) return
+            AaLog.i("Start Aap transport read loop")
+            aapRead = AapRead.Factory.create(connection!!, this, aapVideo)
+            pollHandler?.sendEmptyMessage(MSG_POLL)
+        }
     }
 
-    private fun handshake(connection: AccessoryConnection): Boolean {
+    private fun handshake(connection: AccessoryConnection, viaHeadunit: Boolean): Boolean {
         try {
             if (!connection.isSingleMessage) SystemClock.sleep(500)
 
@@ -226,7 +247,11 @@ class AapTransport(
             var attempt = 0
             var received = false
             val versionDeadline = SystemClock.elapsedRealtime() + HANDSHAKE_TIMEOUT_MS
-            while (attempt < 3 && connection.isConnected) {
+            // A fresh :5277 socket already represents a new Gearhead session. If it stays
+            // silent, let the receiver close it and retry after the teardown cooldown.
+            val versionAttempts = if (viaHeadunit) 1 else 3
+            val responseTimeoutMs = if (viaHeadunit) 3_000 else 2_000
+            while (attempt < versionAttempts && connection.isConnected) {
                 if (SystemClock.elapsedRealtime() >= versionDeadline) {
                     AaLog.e("Handshake: Version exchange timed out after $attempt attempt(s).")
                     return false
@@ -240,7 +265,7 @@ class AapTransport(
                     continue
                 }
 
-                val recvDeadline = SystemClock.elapsedRealtime() + 2000
+                val recvDeadline = SystemClock.elapsedRealtime() + responseTimeoutMs
                 while (SystemClock.elapsedRealtime() < recvDeadline) {
                     val remaining = (recvDeadline - SystemClock.elapsedRealtime()).toInt().coerceAtLeast(100)
                     ret = connection.recvBlocking(buffer, buffer.size, remaining, false)
@@ -255,8 +280,10 @@ class AapTransport(
                     AaLog.w("Handshake: Ignoring unexpected message (ch=$ch, type=0x${type.toString(16)}, len=$ret). Waiting for VERSION_RESPONSE.")
                 }
                 if (received) break
-                AaLog.w("Handshake: No VERSION_RESPONSE within 2s (attempt $attempt)")
-                SystemClock.sleep(200)
+                if (connection.isConnected) {
+                    AaLog.w("Handshake: No VERSION_RESPONSE within ${responseTimeoutMs}ms (attempt $attempt)")
+                }
+                if (attempt < versionAttempts) SystemClock.sleep(200)
             }
 
             if (!received) {

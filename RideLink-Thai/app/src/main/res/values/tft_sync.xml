@@ -34,9 +34,6 @@
     <string name="tft_issue_display_unknown">ยังไม่ได้ตรวจ</string>
     <string name="tft_issue_display_yes">เห็นภาพ</string>
     <string name="tft_issue_display_no">ไม่เห็นภาพ</string>
-    <string name="tft_issue_preview">ดูรายงานก่อนส่ง</string>
-    <string name="tft_issue_preview_note">ตรวจข้อมูลและล็อกด้านล่างก่อนส่งไปยัง Google Forms</string>
-    <string name="tft_issue_edit">กลับไปแก้</string>
     <string name="tft_issue_send">ส่งรายงาน</string>
     <string name="tft_issue_sending">กำลังส่งรายงาน…</string>
     <string name="tft_issue_send_success">ส่งรายงานสำเร็จแล้ว</string>

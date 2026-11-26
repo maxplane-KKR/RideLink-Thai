@@ -26,6 +26,7 @@ import android.view.Surface
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 
@@ -53,6 +54,7 @@ class AaReceiver(
         @Volatile private var lastTeardownElapsed: Long = -1L
         @Volatile private var lastTeardownGraceful: Boolean = true
         private val teardownsInFlight = AtomicInteger(0)
+        private val headunitAttemptInFlight = AtomicBoolean(false)
 
         private fun markTeardown(graceful: Boolean) {
             lastTeardownGraceful = graceful
@@ -101,7 +103,7 @@ class AaReceiver(
      */
     @Volatile var onNeedSelfModeFallback: (() -> Unit)? = null
 
-    /** Thai rider guidance when the head unit server is off or wedged (coordinator keeps retrying). */
+    /** Rider guidance when the head unit server is off or repeatedly fails the handshake. */
     @Volatile var onHeadunitGuidance: ((Int) -> Unit)? = null
     @Volatile var onHeadunitConnected: (() -> Unit)? = null
 
@@ -226,7 +228,25 @@ class AaReceiver(
             running = false
             t = transport; transport = null
             c = connection; connection = null
+            if (t != null) teardownsInFlight.incrementAndGet()
             sessionStarting = false
+        }
+        if (t != null) {
+            thread(name = "aa-teardown", isDaemon = true) {
+                var graceful = false
+                try {
+                    graceful = t.stopGracefully()
+                } catch (e: Exception) {
+                    log("[AA] graceful stop error: ${e.message}")
+                } finally {
+                    try { c?.disconnect() } catch (_: Exception) {}
+                    markTeardown(graceful)
+                    teardownsInFlight.decrementAndGet()
+                    log("[AA] session closed (ByeBye=${if (graceful) "acknowledged" else "unconfirmed"})")
+                }
+            }
+        } else {
+            try { c?.disconnect() } catch (_: Exception) {}
         }
         AaSelfMode.cancel()
         clearBridgeSession()
@@ -240,25 +260,6 @@ class AaReceiver(
         acceptThread?.interrupt(); acceptThread = null
         dialThread?.interrupt(); dialThread = null
         nightAutoThread?.interrupt(); nightAutoThread = null
-
-        if (t != null) {
-            teardownsInFlight.incrementAndGet()
-            thread(name = "aa-teardown", isDaemon = true) {
-                var graceful = false
-                try {
-                    graceful = t.stopGracefully()
-                } catch (e: Exception) {
-                    log("[AA] graceful stop error: ${e.message}")
-                } finally {
-                    try { c?.disconnect() } catch (_: Exception) {}
-                    markTeardown(graceful)
-                    teardownsInFlight.decrementAndGet()
-                    log("[AA] session closed (ByeBye=${if (graceful) "sent" else "skipped"})")
-                }
-            }
-        } else {
-            try { c?.disconnect() } catch (_: Exception) {}
-        }
         AaLog.sink = null
         log("[AA] receiver stopped")
     }
@@ -293,8 +294,11 @@ class AaReceiver(
             AapTransport(videoDecoder, context)
         } catch (e: Exception) {
             runCatching { conn.disconnect() }
-            synchronized(sessionLock) { sessionStarting = false }
-            if (viaHeadunit && running) AaVideoBridge.headunitStatus = HeadunitLinkStatus.HANDSHAKE_FAILED
+            if (viaHeadunit) markTeardown(graceful = false)
+            synchronized(sessionLock) {
+                if (viaHeadunit && running) consecutiveHandshakeFailures++
+                sessionStarting = false
+            }
             log("[AA] TLS initialization failed: ${e.javaClass.simpleName}")
             return
         }
@@ -309,26 +313,23 @@ class AaReceiver(
             try { conn.disconnect() } catch (_: Exception) {}
             if (!local) {
                 // Peer-side drop (EOF / failed handshake): Gearhead lingers — long settle window.
-                markTeardown(graceful = false)
-                var owned = false
-                synchronized(sessionLock) {
-                    if (transport === t) {
+                val owned = synchronized(sessionLock) {
+                    if (running && transport === t) {
+                        markTeardown(graceful = false)
+                        clearBridgeSession()
+                        if (viaHeadunit && wasLive) AaVideoBridge.headunitStatus = HeadunitLinkStatus.UNKNOWN
+                        videoDecoder.onFirstFrameListener = null
+                        activeInput = null
+                        selfModeFallbackTriggered = false
+                        guidanceSurfaced = false
                         transport = null
                         connection = null
                         sessionStarting = false
-                        owned = true
-                    }
+                        true
+                    } else false
                 }
-                if (owned) {
-                    clearBridgeSession()
-                    videoDecoder.onFirstFrameListener = null
-                    activeInput = null
-                    // Let the coordinator start fresh: Self-Mode may be re-poked and guidance re-shown.
-                    selfModeFallbackTriggered = false
-                    guidanceSurfaced = false
-                    if (wasLive) {
-                        try { onSessionEnded?.invoke(userExit) } catch (_: Exception) {}
-                    }
+                if (owned && wasLive) {
+                    try { onSessionEnded?.invoke(userExit) } catch (_: Exception) {}
                 }
             }
         }
@@ -337,15 +338,16 @@ class AaReceiver(
             if (!running) {
                 sessionStarting = false
                 try { conn.disconnect() } catch (_: Exception) {}
+                if (viaHeadunit) markTeardown(graceful = false)
                 return
             }
             connection = conn
             transport = t
+            AaVideoBridge.aaHandshaking = true
+            AaVideoBridge.aaDecoding = false
+            steadyVideoFired = false
         }
         activeInput = input
-        AaVideoBridge.aaHandshaking = true
-        AaVideoBridge.aaDecoding = false
-        steadyVideoFired = false
 
         // Bike touchscreen → Android Auto: EasyConnProber decodes dash touches (PXC cmdType 32) and
         // calls this sink with raw bike-canvas coords + a normalised action. Letterbox-map into AA
@@ -379,30 +381,31 @@ class AaReceiver(
 
 
         log("[AA] starting AAP handshake (version + SSL)…")
-        if (!t.startHandshake(conn)) {
+        if (!t.startHandshake(conn, viaHeadunit)) {
             // startHandshake() already ran quit() → onQuit cleaned up the slot.
-            AaVideoBridge.aaHandshaking = false
             if (running) {
-                consecutiveHandshakeFailures++
-                if (viaHeadunit) AaVideoBridge.headunitStatus = HeadunitLinkStatus.HANDSHAKE_FAILED
-                log("[AA] handshake FAILED (#$consecutiveHandshakeFailures) — coordinator will back off and retry")
+                if (viaHeadunit) {
+                    consecutiveHandshakeFailures++
+                    log("[AA] Head Unit handshake FAILED (#$consecutiveHandshakeFailures)")
+                } else {
+                    log("[AA] fallback handshake FAILED — coordinator will retry")
+                }
             }
             return
         }
-        if (!running || transport !== t) {
+        synchronized(sessionLock) {
+            if (!running || transport !== t) return
+            // Publish readiness only after version + TLS and while this transport owns the slot.
+            consecutiveHandshakeFailures = 0
+            consecutiveRefusals = 0
+            guidanceSurfaced = false
+            if (viaHeadunit) headunitVerified = true
             AaVideoBridge.aaHandshaking = false
-            return
+            AaVideoBridge.aaSessionLive = true
+            AaVideoBridge.headunitSessionLive = viaHeadunit
+            if (viaHeadunit) AaVideoBridge.headunitStatus = HeadunitLinkStatus.CONNECTED
+            AaVideoBridge.aaSessionSeen = true
         }
-        // Only now is the session real: the UI and AaSelfMode may trust aaSessionLive.
-        consecutiveHandshakeFailures = 0
-        consecutiveRefusals = 0
-        guidanceSurfaced = false
-        if (viaHeadunit) headunitVerified = true
-        AaVideoBridge.aaHandshaking = false
-        AaVideoBridge.aaSessionLive = true
-        AaVideoBridge.headunitSessionLive = viaHeadunit
-        if (viaHeadunit) AaVideoBridge.headunitStatus = HeadunitLinkStatus.CONNECTED
-        AaVideoBridge.aaSessionSeen = true
         nightAutoThread = startNightAutoLoop(t)
         log("[AA] handshake OK — pointing decoder at encoder surface and starting read loop")
         videoDecoder.onFirstFrameListener = {
@@ -424,73 +427,90 @@ class AaReceiver(
     private fun sessionBusy(): Boolean = sessionStarting || transport != null
 
     private val coordinatorWakeLock = java.lang.Object()
-    @Volatile private var coordinatorWakeRequested = false
-    @Volatile private var dialNow = false
+    private var coordinatorWakeRequested = false
 
-    /** ปลุก coordinator ให้ลอง :5277 ทันที (เช่นผู้ใช้กดเริ่มเชื่อมต่อระหว่างรอรอบถัดไป) */
-    fun wakeCoordinator() {
+    /** Request fresh status from the existing coordinator while it keeps ownership of :5277. */
+    fun requestHeadunitCheck() {
+        if (!running || AaVideoBridge.aaSessionLive) return
         synchronized(coordinatorWakeLock) {
             coordinatorWakeRequested = true
-            dialNow = true
             coordinatorWakeLock.notifyAll()
         }
     }
 
     private fun waitCoordinator(delayMs: Long) {
         synchronized(coordinatorWakeLock) {
-            if (coordinatorWakeRequested) {
-                coordinatorWakeRequested = false
-                return
-            }
-            coordinatorWakeLock.wait(delayMs)
-            coordinatorWakeRequested = false
+            if (!coordinatorWakeRequested) coordinatorWakeLock.wait(delayMs)
         }
     }
 
     /**
      * The single owner of RideLink's :5277 traffic. Every iteration asks
      * [ProjectionHarness.evaluateAaConnectStep] what to do; the loop lives as long as the receiver,
-     * so a failed handshake or a transient drop is retried automatically (no more Stop → Connect).
+     * so a transient failure is retried and repeated handshake failures wait for an explicit check.
      * AAP roles never change — we are still the head unit; only the TCP direction flips.
      */
     private fun ensureCoordinatorLoop() {
         var lastDialAt = -1L
         while (running) {
-            if (dialNow) { dialNow = false; lastDialAt = -1L }
-            val now = SystemClock.elapsedRealtime()
+            val recheck = synchronized(coordinatorWakeLock) {
+                coordinatorWakeRequested.also { coordinatorWakeRequested = false }
+            }
+            if (recheck) {
+                lastDialAt = -1L
+                synchronized(sessionLock) {
+                    if (running && !AaVideoBridge.aaSessionLive) {
+                        consecutiveRefusals = 0
+                        consecutiveHandshakeFailures = 0
+                        guidanceSurfaced = false
+                        AaVideoBridge.headunitStatus = HeadunitLinkStatus.UNKNOWN
+                    }
+                }
+            }
+            val closing = teardownsInFlight.get() > 0 || headunitAttemptInFlight.get()
             val tdAt = lastTeardownElapsed
-            val judgment = ProjectionHarness.evaluateAaConnectStep(
-                ProjectionHarness.AaConnectInput(
-                    running = running,
-                    sessionBusy = sessionBusy(),
-                    teardownInProgress = teardownsInFlight.get() > 0,
-                    msSinceLastTeardown = if (tdAt < 0) Long.MAX_VALUE else now - tdAt,
-                    lastTeardownGraceful = lastTeardownGraceful,
-                    msSinceLastDial = if (lastDialAt < 0) Long.MAX_VALUE else now - lastDialAt,
-                    consecutiveRefusals = consecutiveRefusals,
-                    consecutiveHandshakeFailures = consecutiveHandshakeFailures,
-                    selfModeFallbackTriggered = selfModeFallbackTriggered,
-                    guidanceSurfaced = guidanceSurfaced,
-                    allowSelfModeFallback = headunitVerified && allowSelfModeRecovery,
-                )
+            val now = SystemClock.elapsedRealtime()
+            val input = ProjectionHarness.AaConnectInput(
+                running = running,
+                sessionBusy = sessionBusy(),
+                teardownInProgress = closing,
+                msSinceLastTeardown = if (tdAt < 0) Long.MAX_VALUE else now - tdAt,
+                lastTeardownGraceful = lastTeardownGraceful,
+                msSinceLastDial = if (lastDialAt < 0) Long.MAX_VALUE else now - lastDialAt,
+                consecutiveRefusals = consecutiveRefusals,
+                consecutiveHandshakeFailures = consecutiveHandshakeFailures,
+                selfModeFallbackTriggered = selfModeFallbackTriggered,
+                guidanceSurfaced = guidanceSurfaced,
+                allowSelfModeFallback = headunitVerified && allowSelfModeRecovery,
             )
+            val judgment = ProjectionHarness.evaluateAaConnectStep(input)
             when (judgment.action) {
                 AaConnectAction.STOP -> return
                 AaConnectAction.HOLD_SESSION_ACTIVE,
                 AaConnectAction.WAIT_SETTLE_COOLDOWN -> waitCoordinator(judgment.delayMs.coerceIn(50L, 2_000L))
+                AaConnectAction.WAIT_FOR_HEADUNIT_RECHECK -> waitCoordinator(0L)
                 AaConnectAction.TRIGGER_SELF_MODE_AND_RETRY_5277 -> {
                     selfModeFallbackTriggered = true
                     log("[AA] ${androidx.core.content.ContextCompat.getContextForLanguage(context).getString(judgment.reasonRes)}")
                     try { onNeedSelfModeFallback?.invoke() } catch (_: Exception) {}
                 }
                 AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED -> {
-                    guidanceSurfaced = true
-                    log("[AA] ${androidx.core.content.ContextCompat.getContextForLanguage(context).getString(judgment.reasonRes)}")
-                    try { onHeadunitGuidance?.invoke(judgment.reasonRes) } catch (_: Exception) {}
+                    val published = synchronized(sessionLock) {
+                        if (!running || sessionBusy()) false
+                        else {
+                            guidanceSurfaced = true
+                            AaVideoBridge.headunitStatus = ProjectionHarness.confirmedHeadunitFailure(input)
+                            true
+                        }
+                    }
+                    if (published) {
+                        log("[AA] ${androidx.core.content.ContextCompat.getContextForLanguage(context).getString(judgment.reasonRes)}")
+                        try { onHeadunitGuidance?.invoke(judgment.reasonRes) } catch (_: Exception) {}
+                    }
                 }
                 AaConnectAction.DIAL_HEADUNIT_5277 -> {
-                    lastDialAt = now
                     dialHeadunitOnce()
+                    lastDialAt = SystemClock.elapsedRealtime()
                 }
             }
         }
@@ -498,10 +518,22 @@ class AaReceiver(
 
     /** One real AAP attempt on :5277 (never a throwaway probe). Runs the handshake inline. */
     private fun dialHeadunitOnce() {
+        if (!headunitAttemptInFlight.compareAndSet(false, true)) return
+        try {
+            if (claimSession()) runHeadunitAttempt()
+        } finally {
+            headunitAttemptInFlight.set(false)
+        }
+    }
+
+    private fun runHeadunitAttempt() {
         try {
             SingleKeyKeyManager.fromResources(context)
         } catch (e: Exception) {
-            if (running) AaVideoBridge.headunitStatus = HeadunitLinkStatus.HANDSHAKE_FAILED
+            synchronized(sessionLock) {
+                if (running) consecutiveHandshakeFailures++
+                sessionStarting = false
+            }
             log("[AA] Head Unit identity unavailable: ${e.javaClass.simpleName}")
             return
         }
@@ -509,8 +541,16 @@ class AaReceiver(
         val sock = try {
             connectLoopback(HEADUNIT_SERVER_PORT)
         } catch (e: Exception) {
-            consecutiveRefusals++
-            if (!sessionBusy()) AaVideoBridge.headunitStatus = HeadunitLinkStatus.REFUSED
+            synchronized(sessionLock) {
+                sessionStarting = false
+                if (!running) return
+                consecutiveRefusals++
+                if (consecutiveHandshakeFailures > 0) {
+                    consecutiveHandshakeFailures = 0
+                    guidanceSurfaced = false
+                    AaVideoBridge.headunitStatus = HeadunitLinkStatus.UNKNOWN
+                }
+            }
             if (consecutiveRefusals <= 2 || consecutiveRefusals == 5 || consecutiveRefusals == 10 || consecutiveRefusals % 30 == 0) {
                 log(
                     "[AA] head unit server :$HEADUNIT_SERVER_PORT no answer " +
@@ -520,12 +560,18 @@ class AaReceiver(
             null
         } ?: return
 
-        if (!claimSession()) {
-            // A :5288 session won the race (or we were stopped mid-connect).
-            try { sock.close() } catch (_: Exception) {}
-            return
+        synchronized(sessionLock) {
+            if (!running) {
+                runCatching { sock.close() }
+                markTeardown(graceful = false)
+                return
+            }
+            if (consecutiveRefusals > 0) {
+                consecutiveRefusals = 0
+                guidanceSurfaced = false
+            }
+            AaVideoBridge.headunitStatus = HeadunitLinkStatus.SERVER_REACHED
         }
-        consecutiveRefusals = 0
         log("[AA] >>> dialled OUT to Android Auto head unit server :$HEADUNIT_SERVER_PORT (AA 17.4 path)")
         handleConnection(sock, viaHeadunit = true)
     }
@@ -546,7 +592,14 @@ class AaReceiver(
             // stream over 127.0.0.1 succeed without being killed mid-flight.
             try { cm?.bindProcessToNetwork(null) } catch (_: Exception) {}
         }
-        return Socket().apply { connect(InetSocketAddress("127.0.0.1", port), DIAL_TIMEOUT_MS) }
+        val socket = Socket()
+        try {
+            socket.connect(InetSocketAddress("127.0.0.1", port), DIAL_TIMEOUT_MS)
+            return socket
+        } catch (e: Exception) {
+            runCatching { socket.close() }
+            throw e
+        }
     }
 
     private fun registerNsd() {

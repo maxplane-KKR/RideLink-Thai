@@ -8,6 +8,7 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 internal data class ObdSample(
     val rpm: Double? = null,
@@ -214,12 +215,26 @@ private fun mode01Values(response: String, pid: String, bytes: Int): Sequence<Lo
     }
 }
 
+internal data class Elm327Config(
+    val atzTimeoutMs: Long = 4_000L,
+    val commandTimeoutMs: Long = 2_500L,
+    val bannerSyncTimeoutMs: Long = 1_500L,
+    val shiftedReplyTimeoutMs: Long = 800L,
+    val retrySettleMs: Long = 200L,
+)
+
+internal data class ElmInitResult(
+    val resyncedBanner: Boolean = false,
+    val retriedCommands: Int = 0,
+)
+
 /** คุยกับอะแดปเตอร์ทีละคำสั่งและแยกข้อความตอบด้วย prompt ของ ELM327 */
 internal class Elm327Telemetry(
     private val input: InputStream,
     private val output: OutputStream,
     private val monotonicMillis: () -> Long = { System.nanoTime() / 1_000_000L },
     private val pause: suspend (Long) -> Unit = { delay(it) },
+    private val config: Elm327Config = Elm327Config(),
     private val onDiagnostic: (ObdCommandDiagnostic) -> Unit = {},
 ) {
     private val reportedDiagnostics = mutableSetOf<Pair<ObdObservedCommand, ObdDiagnosticResult>>()
@@ -230,16 +245,88 @@ internal class Elm327Telemetry(
             runCatching { onDiagnostic(diagnostic) }
         }
     }
-    suspend fun initialize() {
-        command("ATZ", 5_000L)
-        for (setting in listOf("ATE0", "ATH0", "ATSP0")) {
-            if (command(setting).lineSequence().none { it.trim().equals("OK", ignoreCase = true) }) {
-                throw IOException("ELM327 rejected setup")
+
+    suspend fun initialize(): ElmInitResult {
+        var resyncedBanner = false
+        var retriedCommands = 0
+
+        val resetReply = try {
+            command("ATZ", config.atzTimeoutMs)
+        } catch (_: TimeoutCancellationException) {
+            retriedCommands++
+            if (config.retrySettleMs > 0L) pause(config.retrySettleMs)
+            command("ATZ", config.atzTimeoutMs)
+        }
+
+        // หาก ATZ จับได้เฉพาะ prompt ค้างตอนบูตเย็น (ไม่มีแบนเนอร์/OK) ให้รออ่านแบนเนอร์ตามมาโดยไม่ส่งคำสั่งเพิ่ม
+        // เพื่อป้องกันการเลื่อนลำดับ prompt ระหว่าง ATE0/ATH0/ATSP0 และ Mode 01
+        if (isIncompleteResetReply(resetReply)) {
+            for (syncAttempt in 0 until 2) {
+                val extra = readPendingPrompt(config.bannerSyncTimeoutMs) ?: break
+                resyncedBanner = true
+                if (looksLikeResetBanner(extra) || hasOkLine(extra)) break
             }
         }
+
+        for (setting in listOf("ATE0", "ATH0", "ATSP0")) {
+            val outcome = configureSetting(setting)
+            if (outcome.resyncedBanner) resyncedBanner = true
+            retriedCommands += outcome.retriedCommands
+        }
+        return ElmInitResult(resyncedBanner = resyncedBanner, retriedCommands = retriedCommands)
     }
 
-    suspend fun read(pid: ObdPid, timeoutMs: Long = 2_500L): Double? =
+    private suspend fun configureSetting(setting: String): ElmInitResult {
+        var resyncedBanner = false
+        var retried = 0
+        for (attempt in 0 until 2) {
+            val reply = command(setting, config.commandTimeoutMs)
+            if (hasOkLine(reply)) {
+                return ElmInitResult(resyncedBanner = resyncedBanner, retriedCommands = retried)
+            }
+            if (looksLikeResetBanner(reply)) {
+                resyncedBanner = true
+                // แบนเนอร์จากรีเซ็ตมาช้าและเลื่อนเข้าคำสั่งนี้ — อ่าน prompt ถัดไปก่อนเผื่อคำตอบ OK ตามมาแล้ว
+                val trailing = readPendingPrompt(config.shiftedReplyTimeoutMs)
+                if (trailing != null && hasOkLine(trailing)) {
+                    return ElmInitResult(resyncedBanner = true, retriedCommands = retried)
+                }
+            }
+            if (attempt == 0) {
+                retried++
+                if (config.retrySettleMs > 0L) pause(config.retrySettleMs)
+            }
+        }
+        throw IOException("ELM327 rejected setup")
+    }
+
+    private fun hasOkLine(reply: String): Boolean =
+        reply.lineSequence().any { it.trim().equals("OK", ignoreCase = true) }
+
+    private fun looksLikeResetBanner(reply: String): Boolean {
+        val upper = reply.uppercase(Locale.ROOT)
+        return upper.contains("ELM327") ||
+            upper.contains("ELM32") ||
+            upper.contains("STN") ||
+            upper.contains("OBDII") ||
+            upper.contains("OBD-II") ||
+            upper.contains("VLINK") ||
+            upper.contains("ICAR")
+    }
+
+    private fun isIncompleteResetReply(reply: String): Boolean {
+        if (looksLikeResetBanner(reply) || hasOkLine(reply)) return false
+        val tokens = reply.lineSequence()
+            .map { it.trim().uppercase(Locale.ROOT) }
+            .filter { it.isNotEmpty() }
+            .toList()
+        return tokens.isEmpty() || tokens.all { it == "ATZ" || it == "?" || it == "STOPPED" }
+    }
+
+    private suspend fun readPendingPrompt(timeoutMs: Long): String? =
+        withTimeoutOrNull(timeoutMs) { readUntilPrompt() }
+
+    suspend fun read(pid: ObdPid, timeoutMs: Long = config.commandTimeoutMs): Double? =
         pid.decode(command("01${pid.code}", timeoutMs))
 
     suspend fun inventory(): ObdInventory {
@@ -255,7 +342,7 @@ internal class Elm327Telemetry(
     suspend fun inventoryRange(range: Int): ObdInventoryRange? {
         require(range in 0..0xE0 && range % 0x20 == 0)
         val code = range.obdHex()
-        val response = command("01$code", if (range == 0) 8_000 else 2_500)
+        val response = command("01$code", if (range == 0) 8_000L else config.commandTimeoutMs)
         val masks = mode01Values(response, code, 4).toList()
         if (masks.isEmpty()) return null
         val mask = masks.fold(0L, Long::or)
@@ -264,7 +351,7 @@ internal class Elm327Telemetry(
         return ObdInventoryRange(pids, hasNext = mask and 1L != 0L)
     }
 
-    private suspend fun command(text: String, timeoutMs: Long = 2_500L): String {
+    private suspend fun command(text: String, timeoutMs: Long = config.commandTimeoutMs): String {
         val observed = ObdObservedCommand.entries.firstOrNull { it.request == text }
         return try {
             val response = executeCommand(text, timeoutMs)
@@ -294,19 +381,23 @@ internal class Elm327Telemetry(
             output.write("$text\r".toByteArray(Charsets.US_ASCII))
             output.flush()
             if (mode01) lastMode01WriteAt = monotonicMillis()
-            val response = StringBuilder()
-            // อ่านเฉพาะเมื่อมีข้อมูลเพื่อให้ timeout ยกเลิกการรอได้แม้ adapter ไม่ส่ง prompt
-            while (response.length < 4096) {
-                if (input.available() == 0) {
-                    delay(20)
-                    continue
-                }
-                val next = input.read()
-                if (next == -1) throw IOException("ELM327 disconnected")
-                if (next == '>'.code) return@withTimeout response.toString()
-                response.append(next.toChar())
-            }
-            throw IOException("ELM327 response too long")
+            readUntilPrompt()
         }
+    }
+
+    private suspend fun readUntilPrompt(): String {
+        val response = StringBuilder()
+        // อ่านเฉพาะเมื่อมีข้อมูลเพื่อให้ timeout ยกเลิกการรอได้แม้ adapter ไม่ส่ง prompt
+        while (response.length < 4096) {
+            if (input.available() == 0) {
+                delay(20)
+                continue
+            }
+            val next = input.read()
+            if (next == -1) throw IOException("ELM327 disconnected")
+            if (next == '>'.code) return response.toString()
+            response.append(next.toChar())
+        }
+        throw IOException("ELM327 response too long")
     }
 }

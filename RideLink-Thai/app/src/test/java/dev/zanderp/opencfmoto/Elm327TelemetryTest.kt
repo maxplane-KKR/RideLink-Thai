@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.LinkedBlockingQueue
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -278,6 +279,149 @@ class Elm327TelemetryTest {
         } catch (_: IOException) {
             assertEquals(listOf(ObdCommandDiagnostic(ObdObservedCommand.INVENTORY, ObdDiagnosticResult.IO_ERROR)), failed)
             assertFalse(failed.toString().contains("private adapter details"))
+        }
+    }
+
+    @Test fun recoversFromStaleWakePromptBeforeAtzBannerWithoutShiftingReplies() = runBlocking {
+        // Stale '>' from adapter cold boot arrives before ELM327 v1.5 banner; must re-sync 1:1
+        val replies = ">ELM327 v1.5\r>ATE0\rOK\r>OK\r>OK\r>41 0C 1A F8\r>"
+        val commands = ByteArrayOutputStream()
+        val reader = Elm327Telemetry(
+            ByteArrayInputStream(replies.toByteArray()),
+            commands,
+            config = Elm327Config(bannerSyncTimeoutMs = 100L, shiftedReplyTimeoutMs = 100L, retrySettleMs = 0L),
+        )
+
+        val init = reader.initialize()
+        val rpm = reader.read(ObdPid.RPM)
+
+        assertTrue(init.resyncedBanner)
+        assertEquals(0, init.retriedCommands)
+        assertEquals("ATZ\rATE0\rATH0\rATSP0\r010C\r", commands.toString(Charsets.US_ASCII.name()))
+        assertEquals(1726.0, rpm)
+    }
+
+    @Test fun recoversFromEchoOnlyAtzAndWakeNoiseBeforeBanner() = runBlocking {
+        val replies = "ATZ\r>?\r>ELM327 v1.5\r>ATE0\rOK\r>OK\r>OK\r>41 05 6E\r>"
+        val commands = ByteArrayOutputStream()
+        val reader = Elm327Telemetry(
+            ByteArrayInputStream(replies.toByteArray()),
+            commands,
+            config = Elm327Config(bannerSyncTimeoutMs = 100L, shiftedReplyTimeoutMs = 100L, retrySettleMs = 0L),
+        )
+
+        val init = reader.initialize()
+        val coolant = reader.read(ObdPid.COOLANT)
+
+        assertTrue(init.resyncedBanner)
+        assertEquals(70.0, coolant)
+    }
+
+    @Test fun recoversWhenDelayedBannerShiftsIntoAte0WithTrailingOk() = runBlocking {
+        // ATZ received 'OK', then late reset banner shifted into ATE0's read while ATE0's real OK queued behind it
+        val replies = "OK\r>ELM327 v1.5\r>ATE0\rOK\r>OK\r>OK\r>41 0C 0F A0\r>"
+        val commands = ByteArrayOutputStream()
+        val reader = Elm327Telemetry(
+            ByteArrayInputStream(replies.toByteArray()),
+            commands,
+            config = Elm327Config(bannerSyncTimeoutMs = 80L, shiftedReplyTimeoutMs = 80L, retrySettleMs = 0L),
+        )
+
+        val init = reader.initialize()
+        val rpm = reader.read(ObdPid.RPM)
+
+        assertTrue(init.resyncedBanner)
+        assertEquals(0, init.retriedCommands)
+        assertEquals("ATZ\rATE0\rATH0\rATSP0\r010C\r", commands.toString(Charsets.US_ASCII.name()))
+        assertEquals(1000.0, rpm)
+    }
+
+    @Test fun resendsAte0WhenAdapterDroppedCommandDuringResetBanner() = runBlocking {
+        val scripted = ScriptedElmChannel { cmd, attempt ->
+            when (cmd) {
+                "ATZ" -> "OK\r>"
+                "ATE0" -> if (attempt == 1) "ELM327 v1.5\r>" else "OK\r>"
+                "ATH0" -> "OK\r>"
+                "ATSP0" -> "OK\r>"
+                "010C" -> "41 0C 1C 70\r>"
+                else -> "?\r>"
+            }
+        }
+        val reader = Elm327Telemetry(
+            scripted.input,
+            scripted.output,
+            config = Elm327Config(atzTimeoutMs = 80L, bannerSyncTimeoutMs = 50L, shiftedReplyTimeoutMs = 50L, retrySettleMs = 0L),
+        )
+
+        val init = reader.initialize()
+        val rpm = reader.read(ObdPid.RPM)
+
+        assertTrue(init.resyncedBanner)
+        assertEquals(1, init.retriedCommands)
+        assertEquals(listOf("ATZ", "ATE0", "ATE0", "ATH0", "ATSP0", "010C"), scripted.commands)
+        assertEquals(1820.0, rpm)
+    }
+
+    @Test fun retriesAtzOnceOnColdBootTimeoutAndRejectsPersistentSetupFailure() = runBlocking {
+        val scripted = ScriptedElmChannel { cmd, attempt ->
+            when (cmd) {
+                "ATZ" -> if (attempt == 1) null else "ELM327 v1.5\r>"
+                "ATE0", "ATH0", "ATSP0" -> "OK\r>"
+                else -> "NO DATA\r>"
+            }
+        }
+        val reader = Elm327Telemetry(
+            scripted.input,
+            scripted.output,
+            config = Elm327Config(atzTimeoutMs = 60L, bannerSyncTimeoutMs = 40L, shiftedReplyTimeoutMs = 40L, retrySettleMs = 0L),
+        )
+
+        val init = reader.initialize()
+        assertEquals(1, init.retriedCommands)
+        assertEquals(listOf("ATZ", "ATZ", "ATE0", "ATH0", "ATSP0"), scripted.commands)
+
+        val rejecting = Elm327Telemetry(
+            ByteArrayInputStream("ELM327 v1.5\r>ERROR\r>ERROR\r>".toByteArray()),
+            ByteArrayOutputStream(),
+            config = Elm327Config(retrySettleMs = 0L),
+        )
+        try {
+            rejecting.initialize()
+            fail("Expected IOException for persistent setup rejection")
+        } catch (_: IOException) {
+            // Expected
+        }
+    }
+
+    private class ScriptedElmChannel(
+        private val responder: (command: String, commandAttempt: Int) -> String?,
+    ) {
+        private val rx = LinkedBlockingQueue<Int>()
+        private val txBuffer = StringBuilder()
+        private val counts = mutableMapOf<String, Int>()
+        val commands = mutableListOf<String>()
+
+        val input: InputStream = object : InputStream() {
+            override fun available(): Int = rx.size
+            override fun read(): Int = rx.poll() ?: -1
+        }
+
+        val output: OutputStream = object : OutputStream() {
+            override fun write(b: Int) {
+                if (b == '\r'.code) {
+                    val cmd = txBuffer.toString().trim()
+                    txBuffer.setLength(0)
+                    commands.add(cmd)
+                    val attempt = (counts[cmd] ?: 0) + 1
+                    counts[cmd] = attempt
+                    val reply = responder(cmd, attempt)
+                    if (reply != null) {
+                        for (ch in reply) rx.add(ch.code)
+                    }
+                } else {
+                    txBuffer.append(b.toChar())
+                }
+            }
         }
     }
 }

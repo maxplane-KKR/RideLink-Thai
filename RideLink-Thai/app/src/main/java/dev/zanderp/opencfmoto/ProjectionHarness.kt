@@ -259,14 +259,14 @@ object ProjectionHarness {
     const val REFUSED_RETRY_FIRST_MS = 1_500L
     const val REFUSED_RETRY_MS = 2_000L
     const val HANDSHAKE_BACKOFF_BASE_MS = 1_000L
-    const val MAX_RETRY_BACKOFF_MS = 8_000L
     const val REFUSALS_BEFORE_GUIDANCE = 5
-    const val HANDSHAKE_FAILURES_BEFORE_GUIDANCE = 3
+    const val HANDSHAKE_FAILURES_BEFORE_GUIDANCE = 2
 
     enum class AaConnectAction {
         STOP,
         HOLD_SESSION_ACTIVE,
         WAIT_SETTLE_COOLDOWN,
+        WAIT_FOR_HEADUNIT_RECHECK,
         DIAL_HEADUNIT_5277,
         TRIGGER_SELF_MODE_AND_RETRY_5277,
         SURFACE_HEADUNIT_ACTION_NEEDED,
@@ -297,11 +297,8 @@ object ProjectionHarness {
     )
 
     fun retryIntervalMs(consecutiveRefusals: Int, consecutiveHandshakeFailures: Int): Long {
-        if (consecutiveHandshakeFailures > 0) {
-            val shift = (consecutiveHandshakeFailures - 1).coerceIn(0, 10)
-            return (HANDSHAKE_BACKOFF_BASE_MS shl shift).coerceAtMost(MAX_RETRY_BACKOFF_MS)
-        }
         return when {
+            consecutiveHandshakeFailures > 0 -> HANDSHAKE_BACKOFF_BASE_MS
             consecutiveRefusals <= 0 -> 0L
             consecutiveRefusals == 1 -> REFUSED_RETRY_FIRST_MS
             else -> REFUSED_RETRY_MS
@@ -338,18 +335,15 @@ object ProjectionHarness {
             )
         }
         if (!input.guidanceSurfaced) {
-            if (input.consecutiveHandshakeFailures >= HANDSHAKE_FAILURES_BEFORE_GUIDANCE) {
-                return AaConnectJudgment(
-                    AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED, 0L,
-                    R.string.headunit_wedged,
-                )
+            val guidance = headunitGuidance(confirmedHeadunitFailure(input))
+            if (guidance != null) {
+                return AaConnectJudgment(AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED, 0L, guidance)
             }
-            if (input.consecutiveRefusals >= REFUSALS_BEFORE_GUIDANCE) {
-                return AaConnectJudgment(
-                    AaConnectAction.SURFACE_HEADUNIT_ACTION_NEEDED, 0L,
-                    R.string.headunit_refused,
-                )
-            }
+        }
+        if (input.consecutiveHandshakeFailures >= HANDSHAKE_FAILURES_BEFORE_GUIDANCE) {
+            return AaConnectJudgment(
+                AaConnectAction.WAIT_FOR_HEADUNIT_RECHECK, 0L, R.string.headunit_wedged,
+            )
         }
         val interval = retryIntervalMs(input.consecutiveRefusals, input.consecutiveHandshakeFailures)
         if (input.msSinceLastDial in 0 until interval) {
@@ -365,8 +359,21 @@ object ProjectionHarness {
     // 6. Server Status UI (derived from coordinator facts — ZERO socket probes)
     // =========================================================================
 
-    /** Last outcome of the coordinator's single, real :5277 attempt (published by AaReceiver). */
-    enum class HeadunitLinkStatus { UNKNOWN, CONNECTED, REFUSED, HANDSHAKE_FAILED }
+    /** Result of the current :5277 check. Failures become visible after repeated attempts. */
+    enum class HeadunitLinkStatus { UNKNOWN, SERVER_REACHED, CONNECTED, REFUSED, HANDSHAKE_FAILED }
+
+    fun confirmedHeadunitFailure(input: AaConnectInput): HeadunitLinkStatus = when {
+        input.consecutiveHandshakeFailures >= HANDSHAKE_FAILURES_BEFORE_GUIDANCE ->
+            HeadunitLinkStatus.HANDSHAKE_FAILED
+        input.consecutiveRefusals >= REFUSALS_BEFORE_GUIDANCE -> HeadunitLinkStatus.REFUSED
+        else -> HeadunitLinkStatus.UNKNOWN
+    }
+
+    fun headunitGuidance(status: HeadunitLinkStatus): Int? = when (status) {
+        HeadunitLinkStatus.REFUSED -> R.string.headunit_refused
+        HeadunitLinkStatus.HANDSHAKE_FAILED -> R.string.headunit_wedged
+        else -> null
+    }
 
     fun evaluateHeadunitHeader(
         setupComplete: Boolean,
@@ -384,6 +391,7 @@ object ProjectionHarness {
         androidAutoLive -> ServerUiJudgment(R.string.headunit_header_fallback, UiLevel.WARN)
         headunit == HeadunitLinkStatus.REFUSED -> ServerUiJudgment(R.string.headunit_header_off, UiLevel.WARN)
         headunit == HeadunitLinkStatus.HANDSHAKE_FAILED -> ServerUiJudgment(R.string.headunit_header_failed, UiLevel.ERROR)
+        headunit == HeadunitLinkStatus.SERVER_REACHED -> ServerUiJudgment(R.string.headunit_header_waiting_response, UiLevel.BUSY)
         else -> ServerUiJudgment(R.string.headunit_header_checking, UiLevel.BUSY)
     }
 
