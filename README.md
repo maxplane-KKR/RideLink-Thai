@@ -99,15 +99,15 @@ Instead of basic screen-casting that mirrors your phone's lockscreen or forces p
 ## 🛠️ Quick Start Guide
 
 ### Step 1: Enable Headunit Server in Android Auto (One-Time Setup)
-1. Open **RideLink TH** and tap **Open Android Auto** (or open **Settings → Android Auto** on your phone).
+1. If the Head Unit Server is already running, open **RideLink TH** and wait for the automatic check. To set it up, tap the Head Unit banner and choose **Open Android Auto**.
 2. Scroll to the bottom and tap **Version** repeatedly (10 times) to unlock Developer Mode.
 3. Tap the **⋮** menu (top-right corner) and select **Start head unit server**, then return to RideLink TH.
 4. RideLink checks automatically. When the banner says **Head Unit · Running · Ready for bike**, you can connect to the motorcycle. Tap the banner for help if Android Auto does not respond.
 
 ### Step 2: Connect to Your Motorcycle
 1. Turn on the motorcycle ignition and open the **Screen Mirroring / Carbit / QR Code** menu on the TFT display.
-2. In **RideLink TH**, tap **Scan Bike QR** the first time (or re-scan anytime to refresh the bike link).
-3. Tap **Start Connection** on the Dashboard and approve the system Wi-Fi prompt if Android shows one.
+2. When Head Unit is ready, tap **Scan Bike QR** for the first connection or to refresh the bike link. A successful scan starts the connection.
+3. For a saved motorcycle, tap **Start Connection** on the Dashboard. Approve the system Wi-Fi prompt if Android shows one.
 4. Open **TFT Display → Live Dashboard** to try one of the 14 live themes with the built-in clock and OBD2 gauges. You can also browse **Settings → Recommended OBD2** for adapter options.
 
 ---
